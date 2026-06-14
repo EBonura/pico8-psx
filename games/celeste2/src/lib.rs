@@ -86,11 +86,26 @@ pub fn run() {
         game::set_input(mask);
 
         game::update();
+        sfx::update(); // advance the music/SFX sequencer one frame (PICO-8 _update)
 
         fb.clear(0, 0, 16); // PICO-8 dark-blue backdrop
         game::draw();
         gpu::draw_sync();
         gpu::vsync();
         fb.swap();
+    }
+}
+
+/// Offline music test: play `music(pattern)` and run the sequencer forever, so
+/// the host can capture the exact same song the cart plays and compare it,
+/// note-aligned, with a PICO-8 recording of `music(pattern)`. Not part of the
+/// game; driven by the `musictest` binary + `tools/psx-audio-capture`.
+pub fn run_music_test(pattern: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    sfx::music(pattern, 0, 0);
+    loop {
+        sfx::update();
+        gpu::vsync();
     }
 }

@@ -12,6 +12,11 @@ edition = "2021"
 name = "celeste2"
 path = "src/main.rs"
 
+# Offline audio test disc (fidelity work; not the game).
+[[bin]]
+name = "musictest"
+path = "src/bin/musictest.rs"
+
 [profile.release]
 # no_std has no unwinder; abort keeps the binary small.
 panic         = "abort"
