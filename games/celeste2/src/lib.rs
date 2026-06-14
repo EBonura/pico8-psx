@@ -113,6 +113,20 @@ pub fn run() {
     }
 }
 
+/// Offline SFX test: play `sfx(id)` repeatedly (id once, ~3s gap) so the host can
+/// capture it and compare to a PICO-8 recording of the same SFX. Not the game.
+pub fn run_sfx_test(id: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    loop {
+        sfx::play(id);
+        for _ in 0..240 {
+            sfx::update();
+            gpu::vsync();
+        }
+    }
+}
+
 /// Offline music test: play `music(pattern)` and run the sequencer forever, so
 /// the host can capture the exact same song the cart plays and compare it,
 /// note-aligned, with a PICO-8 recording of `music(pattern)`. Not part of the

@@ -258,14 +258,63 @@ unsafe fn advance_custom(v: usize) {
         let ls = meta[1] as i32;
         let le = meta[2] as i32;
         if le > 0 && CHANNELS[v].custom_pos >= le {
-            CHANNELS[v].custom_pos = ls; // loop the sustain region
+            CHANNELS[v].custom_pos = ls; // loop the sustain region while held
         } else if CHANNELS[v].custom_pos >= 32 {
-            CHANNELS[v].custom_pos = 31; // no loop: hold the last step
+            CHANNELS[v].custom_pos = 31;
         }
         stepped = true;
     }
     if stepped {
         custom_set_voice(v, false);
+    }
+    custom_apply_effect(v);
+}
+
+/// Per-frame effect for the current custom-instrument step (its own notes carry
+/// vibrato/fades -- e.g. the sustain of celeste2's pad instruments wobbles).
+unsafe fn custom_apply_effect(v: usize) {
+    let ch = CHANNELS[v];
+    let k = ch.custom_k as usize;
+    let cnote = AUDIO.sfx_notes[k][(ch.custom_pos & 31) as usize];
+    let eff = sfx_effect(cnote);
+    let cvol = sfx_vol(cnote);
+    if cvol == 0 || eff == 0 {
+        return;
+    }
+    let cwave = sfx_instr(cnote);
+    let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
+    let played = (ch.note_pitch + sfx_pitch(cnote) - base).clamp(0, 63);
+    let base_pitch = get_pitch(played, cwave) as i32;
+    let base_vol = VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7;
+    let total = (AUDIO.sfx_meta[k][0] as i32 * TICK_PER_SPEED).max(1);
+    let t = ch.custom_tick;
+    let voice = Voice::new(v as u8);
+    match eff {
+        2 => {
+            // vibrato
+            CHANNELS[v].vibrato_phase += 16;
+            let phase = CHANNELS[v].vibrato_phase & 0xFF;
+            let m = if phase < 64 {
+                phase
+            } else if phase < 192 {
+                128 - phase
+            } else {
+                phase - 256
+            };
+            let p = (base_pitch + (m * base_pitch) / 2048).clamp(1, 0x3FFF);
+            voice.set_pitch(Pitch::raw(p as u16));
+        }
+        4 => {
+            // fade in over the custom row
+            let vv = (base_vol * t / total) as i16;
+            voice.set_volume(Volume(vv), Volume(vv));
+        }
+        5 => {
+            // fade out over the custom row
+            let vv = (base_vol * (total - t) / total) as i16;
+            voice.set_volume(Volume(vv), Volume(vv));
+        }
+        _ => {}
     }
 }
 
@@ -284,6 +333,7 @@ unsafe fn start_channel_note(v: usize) {
         CHANNELS[v].custom_k = instr;
         CHANNELS[v].custom_pos = 0;
         CHANNELS[v].custom_tick = 0;
+        CHANNELS[v].vibrato_phase = 0;
         CHANNELS[v].note_pitch = sfx_pitch(note);
         CHANNELS[v].note_vol = vol;
         voice_key_off(v);
