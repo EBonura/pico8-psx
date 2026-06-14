@@ -12,12 +12,20 @@ MKISOPSX := $(PSOXIDE)/tools/mkisopsx
 TARGET   := mipsel-sony-psx
 DIST     := $(ROOT)/dist
 
-.PHONY: help submodule clean demo demo-disc celeste celeste-disc celeste2 celeste2-disc
+# Where PSoXide's frontend scans for games (the `game_library` setting). The
+# `collection` target installs the demo disc here as `celeste_collection` so it
+# shows up in PSoXide's list automatically. Override with `make collection
+# PSOXIDE_LIB=/path`.
+PSOXIDE_LIB     ?= $(HOME)/Downloads/ps1 games
+COLLECTION_NAME := celeste_collection
+
+.PHONY: help submodule clean demo demo-disc collection celeste celeste-disc celeste2 celeste2-disc
 
 help:
 	@echo "pico8-psx targets:"
 	@echo "  make demo          - build the demo-disc launcher PSX-EXE (both games + menu)"
 	@echo "  make demo-disc     - build the demo + pack dist/demo.{bin,cue}  [headline artifact]"
+	@echo "  make collection    - build the demo + install into PSoXide's library as celeste_collection"
 	@echo "  make celeste       - build the standalone Celeste PSX-EXE"
 	@echo "  make celeste-disc  - build celeste + pack a burnable .bin/.cue into dist/"
 	@echo "  make celeste2      - build the standalone Celeste 2 PSX-EXE"
@@ -52,6 +60,18 @@ demo-disc: demo
 		--out $(DIST)/demo.bin \
 		--volume PICO8PSX
 	@echo "DISC -> $(DIST)/demo.cue"
+
+# Install the demo disc into PSoXide's game library as `celeste_collection`,
+# so it appears in the frontend's list. mkisopsx writes the .cue alongside the
+# .bin with a relative FILE reference, matching the library's per-game folder
+# layout. The library path may contain a space, so quote it in the recipe.
+collection: demo
+	@mkdir -p "$(PSOXIDE_LIB)/$(COLLECTION_NAME)"
+	cd $(MKISOPSX) && cargo run --release -- \
+		--exe $(DEMO_EXE) \
+		--out "$(PSOXIDE_LIB)/$(COLLECTION_NAME)/$(COLLECTION_NAME).bin" \
+		--volume CELESTECOLL
+	@echo "INSTALLED -> $(PSOXIDE_LIB)/$(COLLECTION_NAME)/$(COLLECTION_NAME).cue"
 
 # ---- Celeste ---------------------------------------------------------
 CELESTE_DIR := $(ROOT)/games/celeste

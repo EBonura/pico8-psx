@@ -25,4 +25,5 @@ pub mod font;
 pub mod palette;
 pub mod rng;
 pub mod sfx;
+pub mod util;
 mod sin_table;
