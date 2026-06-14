@@ -94,12 +94,15 @@ fn update_input() {
             INPUT_X = 0;
         }
 
+        // Input buffers: PICO-8 sets these to 4 at 30fps; at 60fps the window is
+        // 8 frames (a buffer of 4 here halved the real-time grace and made jumps
+        // feel unresponsive).
         let jump = held(IN_JUMP);
-        JUMP_PRESSED = if jump && !JUMP_HELD { 4 } else if jump { (JUMP_PRESSED - 1).max(0) } else { 0 };
+        JUMP_PRESSED = if jump && !JUMP_HELD { 8 } else if jump { (JUMP_PRESSED - 1).max(0) } else { 0 };
         JUMP_HELD = jump;
 
         let grap = held(IN_GRAPPLE);
-        GRAP_PRESSED = if grap && !GRAP_HELD { 4 } else if grap { (GRAP_PRESSED - 1).max(0) } else { 0 };
+        GRAP_PRESSED = if grap && !GRAP_HELD { 8 } else if grap { (GRAP_PRESSED - 1).max(0) } else { 0 };
         GRAP_HELD = grap;
     }
 }
