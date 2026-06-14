@@ -139,3 +139,17 @@ pub fn run_sfx_soundtest(frames: &[u16]) {
         n += 1;
     }
 }
+
+/// Offline music test: play `music(pattern)` and run the sequencer forever, so
+/// the host can capture the exact same song the cart plays and compare it,
+/// note-aligned, with a PICO-8 recording of `music(pattern)`. Not part of the
+/// game; driven by the `musictest` binary + `tools/psx-audio-capture`.
+pub fn run_music_test(pattern: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    sfx::music(pattern, 0, 0);
+    loop {
+        sfx::update();
+        gpu::vsync();
+    }
+}

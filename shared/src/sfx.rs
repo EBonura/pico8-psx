@@ -50,7 +50,10 @@ const MUSIC_LOOP_START: u8 = 0x01;
 const MUSIC_LOOP_END: u8 = 0x02;
 const MUSIC_STOP: u8 = 0x04;
 
-const VOL_TABLE: [u16; 8] = [0x0000, 0x0800, 0x1000, 0x1800, 0x2000, 0x2800, 0x3000, 0x3800];
+// Per-note volume (PICO-8 vol 0..7). Scaled so four music voices at max sum
+// to ~full-scale instead of clipping (which was adding harsh harmonics): vol 7
+// caps at 0x1000 (1/4 of the SPU's 0x4000 range).
+const VOL_TABLE: [u16; 8] = [0x0000, 0x0250, 0x0490, 0x06D0, 0x0920, 0x0B60, 0x0DB0, 0x1000];
 
 #[derive(Clone, Copy)]
 struct Channel {
@@ -286,7 +289,9 @@ pub fn init(audio: AudioData) {
     unsafe {
         AUDIO = audio;
         spu::init();
-        spu::set_main_volume(Volume(0x3800), Volume(0x3800));
+        // Full main volume; per-note levels (VOL_TABLE) keep a 4-voice mix
+        // from clipping. (The emulator's SPU output is pre-main-volume.)
+        spu::set_main_volume(Volume(0x3FFF), Volume(0x3FFF));
         for v in 0..24u8 {
             let voice = Voice::new(v);
             voice.set_volume(Volume(0), Volume(0));
