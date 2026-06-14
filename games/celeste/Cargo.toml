@@ -23,14 +23,11 @@ panic         = "abort"
 codegen-units = 1
 lto           = true
 
-# PSoXide SDK + engine, pulled from the pinned submodule via path deps.
-# The submodule preserves PSoXide's full tree, so each crate's own
-# internal path deps resolve unchanged.
+# The shared PICO-8 runtime (backend/fixed/rng/sfx) + the SDK crates this
+# crate's lib.rs/main.rs touch directly. backend/sfx's transitive SDK deps
+# (vram/io/hw/spu) come in through `pico8`.
 [dependencies]
-psx-rt   = { path = "../../third_party/PSoXide/sdk/crates/psx-rt" }
-psx-gpu  = { path = "../../third_party/PSoXide/sdk/crates/psx-gpu" }
-psx-vram = { path = "../../third_party/PSoXide/sdk/crates/psx-vram" }
-psx-io   = { path = "../../third_party/PSoXide/sdk/crates/psx-io" }
-psx-hw   = { path = "../../third_party/PSoXide/crates/psx-hw" }
-psx-pad  = { path = "../../third_party/PSoXide/sdk/crates/psx-pad" }
-psx-spu  = { path = "../../third_party/PSoXide/sdk/crates/psx-spu" }
+pico8   = { path = "../../shared" }
+psx-rt  = { path = "../../third_party/PSoXide/sdk/crates/psx-rt" }
+psx-gpu = { path = "../../third_party/PSoXide/sdk/crates/psx-gpu" }
+psx-pad = { path = "../../third_party/PSoXide/sdk/crates/psx-pad" }

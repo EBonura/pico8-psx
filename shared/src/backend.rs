@@ -1,30 +1,46 @@
 //! PSoXide rendering backend for the PICO-8 platform API.
 //!
-//! Re-implements ccleste's `platform.h` callbacks (spr/map/rectfill/
-//! line/circfill/print/pal/camera/mget/fget) on PSoXide's GPU, using
-//! immediate-mode draws. PICO-8 is a painter's-order renderer and so is
-//! immediate-mode GP0, so call order == layer order, no ordering table.
+//! Re-implements PICO-8's draw callbacks (spr/map/rectfill/line/circfill/
+//! print/pal/camera/mget/fget) on PSoXide's GPU, using immediate-mode draws.
+//! PICO-8 is a painter's-order renderer and so is immediate-mode GP0, so call
+//! order == layer order, no ordering table.
 //!
-//! Display model (mirrors the old C++ port): the PICO-8 128x128 image is
-//! drawn at 2x (256x256) because the spritesheet is pre-doubled. The
-//! 256-wide field is centred in a 320x240 NTSC framebuffer; the 16px
-//! vertical overflow is absorbed by `OFS_Y`.
+//! Display model: the PICO-8 128x128 image is drawn at 2x (256x256) because
+//! the spritesheet is pre-doubled. The 256-wide field is centred in a 320x240
+//! NTSC framebuffer; the 16px vertical overflow is absorbed by `OFS_Y`.
+//!
+//! The spritesheet and tilemap are game-specific, so they come from a [`Cart`]
+//! the game registers via [`set_cart`] / [`upload_assets`]; the font and CLUT
+//! are universal PICO-8 data and live in this crate.
 
-use crate::assets::{
-    font::FONT_DATA,
-    gfx::GFX_DATA,
-    palette::{PICO8_CLUT, PICO8_RGB, TEXT_CLUTS},
-    tilemap::{MAP_W, TILEMAP_DATA, TILE_FLAGS},
-};
+use crate::font::FONT_DATA;
+use crate::palette::{PICO8_CLUT, PICO8_RGB, TEXT_CLUTS};
 use psx_gpu::{self as gpu};
 use psx_hw::gpu::{pack_color, pack_texcoord, pack_vertex, pack_xy};
 use psx_io::gpu::{wait_cmd_ready, write_gp0};
 use psx_vram::{Clut, TexDepth, Tpage, VramRect, upload_16bpp};
 
-// ---- VRAM layout (off-screen, right of the two 320x240 fb halves) ----
+/// A game's PICO-8 graphics data: the doubled 256x256 4bpp spritesheet and the
+/// tilemap (cells + per-sprite flags). Registered once via [`set_cart`]; the
+/// backend's `spr`/`map`/`mget`/`fget` read from the active cart.
+#[derive(Clone, Copy)]
+pub struct Cart {
+    /// 256x256 @ 4bpp spritesheet, 64 halfwords/row (== [u16; 16384]).
+    pub gfx: &'static [u16],
+    /// Map cells, `map_w` wide.
+    pub tilemap: &'static [u8],
+    /// Per-sprite flag byte, indexed by sprite id.
+    pub tile_flags: &'static [u8],
+    /// Map width in cells.
+    pub map_w: usize,
+}
+
+const EMPTY_CART: Cart = Cart { gfx: &[], tilemap: &[], tile_flags: &[], map_w: 128 };
+
+// ---- VRAM layout (off-screen, right of the framebuffers) ----
 const GFX_TPAGE: Tpage = Tpage::new(640, 0, TexDepth::Bit4); // 256x256 4bpp -> 64 halfwords wide
 const FONT_TPAGE: Tpage = Tpage::new(704, 0, TexDepth::Bit4); // 256x170 4bpp
-const SPRITE_CLUT: Clut = Clut::new(0, 480); // 16 entries, below both fb halves
+const SPRITE_CLUT: Clut = Clut::new(0, 480); // 16 entries, below the framebuffers
 const TEXT_CLUT: Clut = Clut::new(0, 481); // one row, re-uploaded per print colour
 
 // ---- Screen transform ----
@@ -34,21 +50,28 @@ const OFS_X: i16 = (320 - PLAY_W) / 2; // centre horizontally -> 32
 const OFS_Y: i16 = -8; // centre the 256-tall field in 240 (clip 8 top/bottom)
 
 // ---- Mutable PICO-8 draw state ----
+static mut CART: Cart = EMPTY_CART;
 static mut CAM_X: i16 = 0;
 static mut CAM_Y: i16 = 0;
 /// PICO-8 `pal()` colour remap (draw index -> palette index).
 static mut PAL: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
-/// Upload the spritesheet, font and sprite CLUT to VRAM. Call once after
-/// `gpu::init`.
-pub fn upload_assets() {
-    upload_16bpp(VramRect::new(GFX_TPAGE.x(), GFX_TPAGE.y(), 64, 256), &GFX_DATA);
+/// Register the active cart (spritesheet + map). Call before drawing.
+pub fn set_cart(cart: Cart) {
+    unsafe { CART = cart };
+}
+
+/// Register `cart` and upload its spritesheet plus the universal font and
+/// sprite CLUT to VRAM. Call once after `gpu::init`.
+pub fn upload_assets(cart: Cart) {
+    set_cart(cart);
+    upload_16bpp(VramRect::new(GFX_TPAGE.x(), GFX_TPAGE.y(), 64, 256), cart.gfx);
     upload_16bpp(VramRect::new(FONT_TPAGE.x(), FONT_TPAGE.y(), 64, 170), &FONT_DATA);
     upload_16bpp(VramRect::new(SPRITE_CLUT.x(), SPRITE_CLUT.y(), 16, 1), &PICO8_CLUT);
 }
 
-/// Re-apply the gfx tpage as the current draw mode. GP0 0x64 sprites
-/// carry no tpage word, so this must precede sprite/map draws each frame.
+/// Re-apply the gfx tpage as the current draw mode. GP0 0x64 sprites carry no
+/// tpage word, so this must precede sprite/map draws each frame.
 #[inline]
 pub fn begin_sprite_pass() {
     GFX_TPAGE.apply_as_draw_mode();
@@ -85,9 +108,9 @@ fn blit16(x: i16, y: i16, u0: u8, v0: u8, clut_word: u16) {
     write_gp0(pack_xy(16, 16));
 }
 
-/// PICO-8 `spr()`. Draws 8x8 PICO-8 sprite `n` (16x16 in the doubled
-/// sheet) at PICO-8 `(x,y)`. Non-flipped uses GP0 0x64; flipped uses a
-/// textured quad with swapped UVs.
+/// PICO-8 `spr()`. Draws 8x8 PICO-8 sprite `n` (16x16 in the doubled sheet) at
+/// PICO-8 `(x,y)`. Non-flipped uses GP0 0x64; flipped uses a textured quad
+/// with swapped UVs.
 pub fn spr(n: i32, x: i16, y: i16, flip_x: bool, flip_y: bool) {
     if n < 0 {
         return;
@@ -112,43 +135,45 @@ pub fn spr(n: i32, x: i16, y: i16, flip_x: bool, flip_y: bool) {
     gpu::draw_quad_textured(verts, uvs, clut_word, GFX_TPAGE.uv_tpage_word(0), (0x80, 0x80, 0x80));
 }
 
-/// `mget(x,y)` — raw map fetch (NOT camera/room relative).
+/// `mget(x,y)` -- raw map fetch (NOT camera/room relative).
 #[inline]
 pub fn mget(x: i32, y: i32) -> i32 {
-    if x < 0 || y < 0 || x >= MAP_W as i32 {
+    let cart = unsafe { CART };
+    if x < 0 || y < 0 || x >= cart.map_w as i32 {
         return 0;
     }
-    let i = x as usize + y as usize * MAP_W;
-    if i >= TILEMAP_DATA.len() {
+    let i = x as usize + y as usize * cart.map_w;
+    if i >= cart.tilemap.len() {
         return 0;
     }
-    TILEMAP_DATA[i] as i32
+    cart.tilemap[i] as i32
 }
 
-/// `fget(t,f)` — tile flag bit `f` of tile `t`.
+/// `fget(t,f)` -- tile flag bit `f` of tile `t`.
 #[inline]
 pub fn fget(t: i32, f: i32) -> bool {
-    if t < 0 || t as usize >= TILE_FLAGS.len() {
+    let cart = unsafe { CART };
+    if t < 0 || t as usize >= cart.tile_flags.len() {
         return false;
     }
-    (TILE_FLAGS[t as usize] >> f) & 1 != 0
+    (cart.tile_flags[t as usize] >> f) & 1 != 0
 }
 
 /// PICO-8 `map()`. Draws map cells `[mx,mx+mw) x [my,my+mh)` at screen
-/// `(tx,ty)`, filtered by `mask` exactly as the C++ port did
-/// (`main.cpp:284-289`): 0 = all; 4 = flags==4 exactly; else flag bit
-/// `mask-1`.
+/// `(tx,ty)`, filtered by `mask`: 0 = all; 4 = flags==4 exactly; else flag bit
+/// `mask-1`. PICO-8 `map()` never draws sprite 0 (treated as empty).
 pub fn map(mx: i32, my: i32, tx: i16, ty: i16, mw: i32, mh: i32, mask: i32) {
     begin_sprite_pass();
     let clut_word = SPRITE_CLUT.uv_clut_word();
+    let cart = unsafe { CART };
     for j in 0..mh {
         for i in 0..mw {
             let t = mget(mx + i, my + j);
+            if t == 0 {
+                continue;
+            }
             if mask != 0 {
-                if t == 0 {
-                    continue;
-                }
-                let flags = TILE_FLAGS.get(t as usize).copied().unwrap_or(0) as i32;
+                let flags = cart.tile_flags.get(t as usize).copied().unwrap_or(0) as i32;
                 let keep = if mask == 4 { flags == 4 } else { flags & (1 << (mask - 1)) != 0 };
                 if !keep {
                     continue;
@@ -167,7 +192,7 @@ pub fn map(mx: i32, my: i32, tx: i16, ty: i16, mw: i32, mh: i32, mask: i32) {
 // Flat shapes
 // --------------------------------------------------------------------
 
-/// PICO-8 `rectfill(x,y,x2,y2,c)` — inclusive, camera-relative.
+/// PICO-8 `rectfill(x,y,x2,y2,c)` -- inclusive, camera-relative.
 pub fn rectfill(x: i16, y: i16, x2: i16, y2: i16, c: i32) {
     let (lx, rx) = if x <= x2 { (x, x2) } else { (x2, x) };
     let (ty, by) = if y <= y2 { (y, y2) } else { (y2, y) };
@@ -185,7 +210,7 @@ pub fn line(x: i16, y: i16, x2: i16, y2: i16, c: i32) {
     gpu::draw_line_mono(sx(x), sy(y), sx(x2), sy(y2), r, g, b);
 }
 
-/// PICO-8 `circfill(x,y,r,c)` — span-filled from horizontal rows.
+/// PICO-8 `circfill(x,y,r,c)` -- span-filled from horizontal rows.
 pub fn circfill(cx: i16, cy: i16, radius: i16, c: i32) {
     if radius < 0 {
         return;
@@ -193,7 +218,6 @@ pub fn circfill(cx: i16, cy: i16, radius: i16, c: i32) {
     let (r, g, b) = rgb(c);
     let mut dy = -radius;
     while dy <= radius {
-        // half-width at this row (integer circle)
         let mut dx = 0;
         while dx * dx + dy * dy <= radius * radius {
             dx += 1;
@@ -212,10 +236,9 @@ pub fn circfill(cx: i16, cy: i16, radius: i16, c: i32) {
 // Text
 // --------------------------------------------------------------------
 
-/// PICO-8 `print(str,x,y,c)` — 4px advance per char, font from the font
-/// tpage with a per-colour CLUT.
+/// PICO-8 `print(str,x,y,c)` -- 4px advance per char, font from the font tpage
+/// with a per-colour CLUT.
 pub fn print(s: &[u8], x: i16, y: i16, c: i32) {
-    // Select the CLUT for this colour and upload it (one row).
     let clut_idx = (unsafe { PAL[(c as usize) & 15] }) as usize;
     upload_16bpp(VramRect::new(TEXT_CLUT.x(), TEXT_CLUT.y(), 16, 1), &TEXT_CLUTS[clut_idx & 15]);
     let clut_word = TEXT_CLUT.uv_clut_word();
@@ -226,7 +249,6 @@ pub fn print(s: &[u8], x: i16, y: i16, c: i32) {
         let ci = (ch & 0x7F) as i32;
         let u0 = ((ci % 16) * 16) as u8;
         let v0 = ((ci / 16) * 16) as u8;
-        // 8x8 glyph (doubled), drawn at the doubled screen position.
         let px = sx(cx);
         let py = sy(y);
         wait_cmd_ready();
@@ -250,14 +272,14 @@ pub fn camera(x: i16, y: i16) {
     }
 }
 
-/// PICO-8 `pal(a,b)` — remap draw colour `a` to `b`.
+/// PICO-8 `pal(a,b)` -- remap draw colour `a` to `b`.
 pub fn pal(a: i32, b: i32) {
     unsafe {
         PAL[(a as usize) & 15] = (b & 15) as u8;
     }
 }
 
-/// PICO-8 `pal()` — reset the colour remap.
+/// PICO-8 `pal()` -- reset the colour remap.
 pub fn pal_reset() {
     unsafe {
         let mut i = 0u8;

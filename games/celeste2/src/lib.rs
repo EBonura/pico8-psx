@@ -1,25 +1,32 @@
-//! `celeste2` -- PICO-8 Celeste Classic 2: Lani's Trek, demade natively
-//! in Rust for the PlayStation 1 on the PSoXide SDK.
+//! `celeste2` -- PICO-8 Celeste Classic 2: Lani's Trek, demade natively in
+//! Rust for the PlayStation 1 on the PSoXide SDK.
 //!
-//! PHASE 1 (current): asset + render bring-up. Uploads the real Celeste 2
-//! spritesheet/CLUT/map to VRAM and renders an actual room's tilemap,
-//! proving the asset pipeline and the PICO-8 -> PSoXide draw backend.
-//! Assets are extracted from the standalone level-1 cart (ExOK/Celeste2,
-//! `1.p8`) by `tools/p8_to_rust.py`. The game logic (fixed-point physics,
-//! the grappling hook, the object engine, the streamed levels) is ported
-//! on top of this backend in later phases.
+//! PHASE 1 (current): asset + render bring-up on the shared `pico8` runtime.
+//! Registers Celeste 2's spritesheet/map as the active [`Cart`] and renders an
+//! actual room's tilemap. The game logic (fixed-point physics, the grappling
+//! hook, the object engine, the PX9-streamed levels) is ported on top next.
 //!
 //! Exposed as a library so the demo-disc launcher can link it in and call
-//! [`run`]; the standalone `main` just calls it. Either way, holding
-//! Select+Start returns from [`run`] (quit to the launcher).
+//! [`run`]; the standalone `main` just calls it. Holding Select+Start returns
+//! from [`run`] (quit to the launcher).
 
 #![no_std]
 
 pub mod assets;
-mod backend;
 
+use assets::gfx::GFX_DATA;
+use assets::tilemap::{MAP_W, TILEMAP_DATA, TILE_FLAGS};
+use pico8::backend::{self, Cart};
 use psx_gpu::{self as gpu, Resolution, VideoMode, framebuf::FrameBuffer};
 use psx_pad::{button, poll_port1};
+
+/// Celeste 2's spritesheet + tilemap as the active PICO-8 cart.
+const CART: Cart = Cart {
+    gfx: &GFX_DATA,
+    tilemap: &TILEMAP_DATA,
+    tile_flags: &TILE_FLAGS,
+    map_w: MAP_W,
+};
 
 /// Boot Celeste 2 and run its frame loop until Select+Start is held.
 pub fn run() {
@@ -28,7 +35,7 @@ pub fn run() {
     gpu::set_draw_area(0, 0, 319, 239);
     gpu::set_draw_offset(0, 0);
 
-    backend::upload_assets();
+    backend::upload_assets(CART);
 
     loop {
         let pad = poll_port1().buttons;
@@ -39,9 +46,7 @@ pub fn run() {
         // PICO-8 dark-blue backdrop around the centred 256x256 field.
         fb.clear(0, 0, 16);
 
-        // Level 1's opening screen: at camera (0,0) the game draws map
-        // cells (0..16, 0..16) -- sky on top, the trailhead ground below.
-        // mask 0 draws every tile in one pass for the bring-up smoke test.
+        // Level 1's opening screen: at camera (0,0) draw map cells (0..16).
         backend::map(0, 0, 0, 0, 16, 16, 0);
 
         gpu::draw_sync();

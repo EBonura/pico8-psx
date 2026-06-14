@@ -6,11 +6,11 @@
 
 #![allow(clippy::needless_return)]
 
-use crate::backend;
-use crate::fixed::{fx, Fix32};
-use crate::rng;
-use crate::sfx;
 use core::ptr::addr_of_mut;
+use pico8::backend;
+use pico8::fixed::{fx, Fix32};
+use pico8::rng;
+use pico8::sfx;
 
 const MAX_OBJECTS: usize = 30;
 const FRUIT_COUNT: usize = 30;

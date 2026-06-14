@@ -1,16 +1,45 @@
-//! PICO-8 audio on the PS1 SPU: a port of psx_audio.cpp. Synthesises
-//! PICO-8's sfx/music by keying SPU voices over the 8 pre-rendered
-//! instrument waveforms. Voices 0-3 = music channels, 4-7 = SFX.
-//! Voice index == channel index throughout.
+//! PICO-8 audio on the PS1 SPU: synthesises PICO-8's sfx/music by keying SPU
+//! voices over the game's pre-rendered instrument waveforms. Voices 0-3 =
+//! music channels, 4-7 = SFX. Voice index == channel index throughout.
+//!
+//! The sound data (waveforms, sfx note tables, music patterns, pitch table) is
+//! game-specific and supplied via [`AudioData`] at [`init`]; the engine itself
+//! is universal PICO-8 behaviour.
 
-use crate::assets::audio_data::{
-    MUSIC_PATTERNS, SFX_META, SFX_NOTES, SPU_PITCH_TABLE, WAVEFORM_ADPCM, WAVEFORM_OFFSET,
-};
 use psx_spu as spu;
 use spu::{Adsr, Pitch, SpuAddr, Voice, Volume};
 
+/// A game's PICO-8 sound data, generated alongside its other assets.
+#[derive(Clone, Copy)]
+pub struct AudioData {
+    /// ADPCM-encoded instrument waveforms (the 8 PICO-8 waveforms), uploaded
+    /// to SPU RAM at [`SPU_WAVEFORM_BASE`].
+    pub waveform_adpcm: &'static [u8],
+    /// Byte offset of each of the 8 waveforms within `waveform_adpcm`.
+    pub waveform_offset: &'static [u16; 8],
+    /// Per-SFX metadata: `[speed, loop_start, loop_end, _]`.
+    pub sfx_meta: &'static [[u8; 4]],
+    /// Per-SFX 32 note words (pitch|instr|vol|effect bit-packed).
+    pub sfx_notes: &'static [[u16; 32]],
+    /// PICO-8 key (0..63) -> SPU pitch.
+    pub spu_pitch_table: &'static [u16; 64],
+    /// Music patterns: `[flags, ch0, ch1, ch2, ch3, _, _, _]`.
+    pub music_patterns: &'static [[u8; 8]],
+    /// Number of valid music patterns (the rest of `music_patterns` is unused).
+    pub music_pattern_count: i32,
+}
+
+const EMPTY_AUDIO: AudioData = AudioData {
+    waveform_adpcm: &[],
+    waveform_offset: &[0; 8],
+    sfx_meta: &[],
+    sfx_notes: &[],
+    spu_pitch_table: &[0; 64],
+    music_patterns: &[],
+    music_pattern_count: 0,
+};
+
 const SPU_WAVEFORM_BASE: u32 = 0x1000;
-const MUSIC_PATTERN_COUNT: i32 = 42;
 const NUM_SFX_VOICES: usize = 4;
 const SFX_VOICE_BASE: usize = 4;
 
@@ -33,6 +62,7 @@ struct Channel {
 }
 const CH0: Channel = Channel { sfx_id: -1, note_pos: 0, tick: 0, vibrato_phase: 0, keyed_on: false };
 
+static mut AUDIO: AudioData = EMPTY_AUDIO;
 static mut CHANNELS: [Channel; 8] = [CH0; 8];
 static mut MUSIC_PATTERN: i32 = -1;
 static mut MUSIC_LOOP: i32 = -1;
@@ -59,7 +89,7 @@ fn sfx_effect(n: u16) -> i32 {
 
 #[inline]
 fn get_pitch(key: i32, instr: i32) -> u16 {
-    let mut p = SPU_PITCH_TABLE[(key & 63) as usize];
+    let mut p = unsafe { AUDIO.spu_pitch_table }[(key & 63) as usize];
     if instr == 6 {
         p >>= 2; // noise: quarter the pitch
     }
@@ -75,7 +105,7 @@ unsafe fn voice_key_off(v: usize) {
 
 unsafe fn start_channel_note(v: usize) {
     let ch = CHANNELS[v];
-    let note = SFX_NOTES[ch.sfx_id as usize][ch.note_pos as usize];
+    let note = AUDIO.sfx_notes[ch.sfx_id as usize][ch.note_pos as usize];
     let vol = sfx_vol(note);
     if vol == 0 {
         voice_key_off(v);
@@ -98,7 +128,7 @@ unsafe fn apply_effects(v: usize) {
     if ch.sfx_id < 0 {
         return;
     }
-    let note = SFX_NOTES[ch.sfx_id as usize][ch.note_pos as usize];
+    let note = AUDIO.sfx_notes[ch.sfx_id as usize][ch.note_pos as usize];
     let effect = sfx_effect(note);
     let pitch_key = sfx_pitch(note);
     let instr = sfx_instr(note);
@@ -107,7 +137,7 @@ unsafe fn apply_effects(v: usize) {
         return;
     }
     let base_pitch = get_pitch(pitch_key, instr) as i32;
-    let speed = SFX_META[ch.sfx_id as usize][0] as i32;
+    let speed = AUDIO.sfx_meta[ch.sfx_id as usize][0] as i32;
     let mut total = speed * TICK_PER_SPEED;
     if total < 1 {
         total = 1;
@@ -119,7 +149,7 @@ unsafe fn apply_effects(v: usize) {
             // slide
             let next_pos = ch.note_pos + 1;
             if next_pos < 32 {
-                let nn = SFX_NOTES[ch.sfx_id as usize][next_pos as usize];
+                let nn = AUDIO.sfx_notes[ch.sfx_id as usize][next_pos as usize];
                 let target = get_pitch(sfx_pitch(nn), sfx_instr(nn)) as i32;
                 let mut p = base_pitch + ((target - base_pitch) * t) / total;
                 p = p.clamp(1, 0x3FFF);
@@ -179,7 +209,7 @@ unsafe fn advance_channel(v: usize) {
     if CHANNELS[v].sfx_id < 0 {
         return;
     }
-    let mut speed = SFX_META[CHANNELS[v].sfx_id as usize][0] as i32;
+    let mut speed = AUDIO.sfx_meta[CHANNELS[v].sfx_id as usize][0] as i32;
     if speed < 1 {
         speed = 1;
     }
@@ -189,7 +219,7 @@ unsafe fn advance_channel(v: usize) {
         CHANNELS[v].tick -= threshold;
         CHANNELS[v].note_pos += 1;
         CHANNELS[v].vibrato_phase = 0;
-        let meta = SFX_META[CHANNELS[v].sfx_id as usize];
+        let meta = AUDIO.sfx_meta[CHANNELS[v].sfx_id as usize];
         let loop_end = meta[2] as i32;
         let loop_start = meta[1] as i32;
         if loop_end > 0 && CHANNELS[v].note_pos >= loop_end {
@@ -206,11 +236,11 @@ unsafe fn advance_channel(v: usize) {
 }
 
 unsafe fn music_advance_pattern() {
-    if MUSIC_PATTERN < 0 || MUSIC_PATTERN >= MUSIC_PATTERN_COUNT {
+    if MUSIC_PATTERN < 0 || MUSIC_PATTERN >= AUDIO.music_pattern_count {
         MUSIC_PATTERN = -1;
         return;
     }
-    let pat = MUSIC_PATTERNS[MUSIC_PATTERN as usize];
+    let pat = AUDIO.music_patterns[MUSIC_PATTERN as usize];
     if pat[0] & MUSIC_LOOP_START != 0 {
         MUSIC_LOOP = MUSIC_PATTERN;
     }
@@ -232,7 +262,7 @@ unsafe fn music_advance_pattern() {
 }
 
 unsafe fn music_any_channel_done() -> bool {
-    let pat = MUSIC_PATTERNS[MUSIC_PATTERN as usize];
+    let pat = AUDIO.music_patterns[MUSIC_PATTERN as usize];
     for c in 0..4 {
         if pat[1 + c] & 0x80 != 0 {
             continue;
@@ -245,8 +275,11 @@ unsafe fn music_any_channel_done() -> bool {
 }
 
 // ---- public API ----
-pub fn init() {
+
+/// Initialise the SPU and load the game's [`AudioData`]. Call once after boot.
+pub fn init(audio: AudioData) {
     unsafe {
+        AUDIO = audio;
         spu::init();
         spu::set_main_volume(Volume(0x3800), Volume(0x3800));
         for v in 0..24u8 {
@@ -256,9 +289,9 @@ pub fn init() {
             voice.set_start_addr(SpuAddr::new(0));
             voice.set_adsr(Adsr { lower: 0x000F, upper: 0x0000 });
         }
-        spu::upload_adpcm(SpuAddr::new(SPU_WAVEFORM_BASE), &WAVEFORM_ADPCM);
+        spu::upload_adpcm(SpuAddr::new(SPU_WAVEFORM_BASE), audio.waveform_adpcm);
         for w in 0..8 {
-            WAVEFORM_ADDR[w] = SPU_WAVEFORM_BASE + WAVEFORM_OFFSET[w] as u32;
+            WAVEFORM_ADDR[w] = SPU_WAVEFORM_BASE + audio.waveform_offset[w] as u32;
         }
         CHANNELS = [CH0; 8];
         MUSIC_PATTERN = -1;
@@ -266,6 +299,7 @@ pub fn init() {
     }
 }
 
+/// Advance the sequencer one frame. Call every game frame.
 pub fn update() {
     unsafe {
         if MUSIC_PATTERN >= 0 {
@@ -273,7 +307,7 @@ pub fn update() {
                 advance_channel(c);
             }
             if music_any_channel_done() {
-                let flags = MUSIC_PATTERNS[MUSIC_PATTERN as usize][0];
+                let flags = AUDIO.music_patterns[MUSIC_PATTERN as usize][0];
                 if flags & MUSIC_STOP != 0 {
                     MUSIC_PATTERN = -1;
                     for c in 0..4 {
@@ -285,7 +319,7 @@ pub fn update() {
                     music_advance_pattern();
                 } else {
                     MUSIC_PATTERN += 1;
-                    if MUSIC_PATTERN >= MUSIC_PATTERN_COUNT {
+                    if MUSIC_PATTERN >= AUDIO.music_pattern_count {
                         MUSIC_PATTERN = -1;
                     } else {
                         music_advance_pattern();
@@ -340,7 +374,7 @@ pub fn music(pattern: i32, _fade: i32, _mask: i32) {
             }
             return;
         }
-        if pattern >= MUSIC_PATTERN_COUNT {
+        if pattern >= AUDIO.music_pattern_count {
             return;
         }
         MUSIC_PATTERN = pattern;

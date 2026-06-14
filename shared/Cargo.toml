@@ -1,0 +1,18 @@
+[package]
+name    = "pico8"
+version = "0.1.0"
+edition = "2021"
+
+# The shared PICO-8 runtime for PS1: the platform backend (spr/map/print/...),
+# 16.16 fixed-point, the PICO-8 RNG + sin table, the universal font/palette,
+# and the SPU audio engine. Game crates path-dep this and supply only their
+# own assets (a `Cart`) and game logic, so a new PICO-8 port is "drop in the
+# assets + write the game loop". Standalone workspace, like the games.
+[workspace]
+
+[dependencies]
+psx-gpu  = { path = "../third_party/PSoXide/sdk/crates/psx-gpu" }
+psx-vram = { path = "../third_party/PSoXide/sdk/crates/psx-vram" }
+psx-io   = { path = "../third_party/PSoXide/sdk/crates/psx-io" }
+psx-hw   = { path = "../third_party/PSoXide/crates/psx-hw" }
+psx-spu  = { path = "../third_party/PSoXide/sdk/crates/psx-spu" }

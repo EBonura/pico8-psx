@@ -12,25 +12,20 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 name = "celeste"
 version = "0.1.0"
 dependencies = [
+ "pico8",
  "psx-gpu",
- "psx-hw",
- "psx-io",
  "psx-pad",
  "psx-rt",
- "psx-spu",
- "psx-vram",
 ]
 
 [[package]]
 name = "celeste2"
 version = "0.1.0"
 dependencies = [
+ "pico8",
  "psx-gpu",
- "psx-hw",
- "psx-io",
  "psx-pad",
  "psx-rt",
- "psx-vram",
 ]
 
 [[package]]
@@ -43,6 +38,17 @@ dependencies = [
  "psx-gpu",
  "psx-pad",
  "psx-rt",
+ "psx-vram",
+]
+
+[[package]]
+name = "pico8"
+version = "0.1.0"
+dependencies = [
+ "psx-gpu",
+ "psx-hw",
+ "psx-io",
+ "psx-spu",
  "psx-vram",
 ]
 
