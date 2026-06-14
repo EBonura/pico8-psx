@@ -1,0 +1,19 @@
+[package]
+name = "psx-audio-capture"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone host tool (builds for the host, NOT the mipsel PSX target).
+# Path-deps the PSoXide emulator crates from the submodule; cargo resolves
+# their workspace-inherited deps from the submodule's own workspace root,
+# so the submodule itself stays untouched.
+[workspace]
+
+[[bin]]
+name = "psx-audio-capture"
+path = "src/main.rs"
+
+[dependencies]
+emulator-core    = { path = "../../third_party/PSoXide/emu/crates/emulator-core" }
+psx-iso          = { path = "../../third_party/PSoXide/crates/psx-iso" }
+psoxide-settings = { path = "../../third_party/PSoXide/emu/crates/psoxide-settings" }

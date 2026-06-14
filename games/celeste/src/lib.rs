@@ -83,3 +83,39 @@ pub fn run() {
         fb.swap();
     }
 }
+
+/// Number of silent frames played between SFX in the soundtest. Doubles as
+/// the split marker for the host capture (a clear gap between clips).
+pub const SOUNDTEST_GAP_FRAMES: u32 = 18; // ~0.3s
+
+/// Offline SFX soundtest: play SFX `0..frames.len()` one at a time, each for
+/// a FIXED number of frames `frames[n]` (so the host can split the captured
+/// SPU output at exact offsets), separated by [`SOUNDTEST_GAP_FRAMES`] of
+/// silence. Diffed against the PICO-8 reference recordings. Not part of the
+/// game; driven by the `soundtest` binary + `tools/psx-audio-capture`.
+pub fn run_sfx_soundtest(frames: &[u16]) {
+    // gpu::init only to get a 60fps VBlank for sequencer pacing; we never draw.
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init();
+
+    let mut n: usize = 0;
+    loop {
+        // Silence gap (also lets the previous SFX's tail fully decay).
+        sfx::play(-1);
+        for _ in 0..SOUNDTEST_GAP_FRAMES {
+            sfx::update();
+            gpu::vsync();
+        }
+
+        if n >= frames.len() {
+            return; // host capture ends; the bin shim loops us again
+        }
+
+        sfx::play(n as i32);
+        for _ in 0..frames[n] {
+            sfx::update();
+            gpu::vsync();
+        }
+        n += 1;
+    }
+}

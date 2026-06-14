@@ -12,6 +12,11 @@ edition = "2021"
 name = "celeste"
 path = "src/main.rs"
 
+# Offline SFX soundtest disc (audio fidelity work; not the game).
+[[bin]]
+name = "soundtest"
+path = "src/bin/soundtest.rs"
+
 [profile.release]
 # no_std has no unwinder; abort keeps the binary small.
 panic         = "abort"
