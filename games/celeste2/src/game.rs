@@ -20,6 +20,7 @@ use crate::assets::levels::LEVELS;
 use crate::assets::tilemap::TILE_FLAGS;
 use pico8::backend::{self, Cart};
 use pico8::fixed::{fx, Fix32};
+use pico8::rng;
 use pico8::sfx;
 use pico8::util::{approach, clamp, sign};
 
@@ -118,9 +119,20 @@ fn consume_grapple_press() -> bool {
     }
 }
 
-// ---- audio: PICO-8 psfx(id, off, len) -> a sub-range of sfx `id` ----
+// ---- audio: PICO-8 psfx(id, off, len[, lock]) with the sfx_timer debounce ----
+static mut SFX_TIMER: i32 = 0;
 fn psfx(id: i32, off: i32, len: i32) {
-    sfx::play_range(id, off, len);
+    psfx_lock(id, off, len, 0);
+}
+fn psfx_lock(id: i32, off: i32, len: i32, lock: i32) {
+    unsafe {
+        if SFX_TIMER <= 0 || lock > 0 {
+            sfx::play_range(id, off, len);
+            if lock > 0 {
+                SFX_TIMER = lock;
+            }
+        }
+    }
 }
 fn music(n: i32) {
     sfx::music(n, 0, 0);
@@ -288,6 +300,60 @@ static mut CAM_Y: i32 = 0;
 static mut CAM_MODE: i32 = 1;
 static mut FRAMES: i32 = 0; // for time()-driven wobble
 static mut SCARF: [Vec2; 5] = [VZ; 5];
+
+// Background particles: drifting snow + parallax clouds (26 each).
+#[derive(Clone, Copy)]
+struct Cloud {
+    x: Fix32,
+    y: Fix32,
+    s: Fix32,
+}
+const CLOUD0: Cloud = Cloud { x: Fix32::ZERO, y: Fix32::ZERO, s: Fix32::ZERO };
+static mut SNOW: [Vec2; 26] = [VZ; 26];
+static mut CLOUDS: [Cloud; 26] = [CLOUD0; 26];
+
+unsafe fn init_particles() {
+    for i in 0..26 {
+        SNOW[i] = Vec2 { x: rng::rnd(fi(132)), y: rng::rnd(fi(132)) };
+        CLOUDS[i] = Cloud {
+            x: rng::rnd(fi(132)),
+            y: rng::rnd(fi(132)),
+            s: fi(16) + rng::rnd(fi(32)),
+        };
+    }
+}
+
+/// Parallax background clouds (drawn behind the tilemap).
+unsafe fn draw_clouds() {
+    for i in 0..26 {
+        let mut c = CLOUDS[i];
+        let s = c.s;
+        let x = fi(CAM_X) + (c.x - fi(CAM_X) * fx(0.9)).rem_floor(fi(128) + s) - s / fi(2);
+        let y = fi(CAM_Y) + (c.y - fi(CAM_Y) * fx(0.9)).rem_floor(fi(128) + s / fi(2));
+        let (xi, yi) = (x.to_int() as i16, y.to_int() as i16);
+        backend::circfill(xi, yi, (s / fi(3)).to_int() as i16, 13);
+        if i % 2 == 0 {
+            backend::circfill((x - s / fi(3)).to_int() as i16, yi, (s / fi(5)).to_int() as i16, 13);
+            backend::circfill((x + s / fi(3)).to_int() as i16, yi, (s / fi(6)).to_int() as i16, 13);
+        }
+        c.x += fi(4 - (i as i32) % 4) * fx(0.25) * HALF;
+        CLOUDS[i] = c;
+    }
+}
+
+/// Drifting snow (drawn over the scene).
+unsafe fn draw_snow() {
+    let t = fi(FRAMES) / fi(60);
+    for i in 0..26 {
+        let mut s = SNOW[i];
+        let px = fi(CAM_X) + (s.x - fi(CAM_X) * HALF).rem_floor(fi(132)) - fi(2);
+        let py = fi(CAM_Y) + (s.y - fi(CAM_Y) * HALF).rem_floor(fi(132));
+        backend::circfill(px.to_int() as i16, py.to_int() as i16, (i as i32 % 2) as i16, 7);
+        s.x += fi(4 - (i as i32) % 4) * HALF;
+        s.y += (t * fx(0.25) + fi(i as i32) * fx(0.1)).sin();
+        SNOW[i] = s;
+    }
+}
 
 fn new_slot() -> usize {
     unsafe {
@@ -558,7 +624,7 @@ unsafe fn player_die(i: usize) {
     OBJ[i].state = 99;
     FREEZE = 2;
     SHAKE = 5;
-    psfx(14, 16, 16);
+    psfx_lock(14, 16, 16, 240);
 }
 
 // ====================================================================
@@ -732,6 +798,85 @@ unsafe fn grapple_check(i: usize, x: Fix32, y: Fix32) -> i32 {
     0
 }
 
+unsafe fn player_bounce(i: usize, bx: Fix32, by: Fix32) {
+    OBJ[i].state = 0;
+    OBJ[i].spd.y = fi(-4);
+    OBJ[i].var_jump_speed = fi(-4);
+    OBJ[i].t_var_jump = 8;
+    OBJ[i].t_jump_grace = 0;
+    OBJ[i].auto_var_jump = true;
+    OBJ[i].spd.x += sign(OBJ[i].x - bx) * fx(0.5);
+    let snap = by - OBJ[i].y;
+    move_y_exact(i, snap);
+}
+
+unsafe fn player_spring(i: usize, by: Fix32) {
+    consume_jump_press();
+    if JUMP_HELD {
+        psfx(17, 2, 3);
+    } else {
+        psfx(17, 0, 2);
+    }
+    OBJ[i].state = 0;
+    OBJ[i].spd.y = fi(-5);
+    OBJ[i].var_jump_speed = fi(-5);
+    OBJ[i].t_var_jump = 12; // PICO-8 6, doubled
+    OBJ[i].t_jump_grace = 0;
+    OBJ[i].rem.y = Fix32::ZERO;
+    OBJ[i].auto_var_jump = false;
+    let sb = OBJ[i].link;
+    if sb != NONE {
+        OBJ[sb].link = NONE; // springboard.player = nil
+    }
+    OBJ[i].link = NONE;
+    let snap = by - OBJ[i].y;
+    move_y_exact(i, snap);
+}
+
+/// True if the player is falling onto `o` from above (snowball/springboard).
+unsafe fn bounce_check(i: usize, o: usize) -> bool {
+    OBJ[i].spd.y >= Fix32::ZERO && OBJ[i].y - OBJ[i].spd.y < OBJ[o].y + OBJ[o].spd.y + fi(4)
+}
+
+unsafe fn snowball_bounce_overlaps(snow: usize, player: usize) -> bool {
+    if OBJ[snow].spd.x != Fix32::ZERO {
+        OBJ[snow].hit_w = fi(12);
+        OBJ[snow].hit_x = fi(-2);
+        let r = overlaps(snow, player, Fix32::ZERO, Fix32::ZERO);
+        OBJ[snow].hit_w = fi(8);
+        OBJ[snow].hit_x = Fix32::ZERO;
+        r
+    } else {
+        overlaps(snow, player, Fix32::ZERO, Fix32::ZERO)
+    }
+}
+
+unsafe fn obj_on_release(obj: usize, thrown: bool) {
+    match OBJ[obj].otype {
+        ObjType::Snowball => {
+            if !thrown {
+                OBJ[obj].stop = true;
+            }
+            OBJ[obj].timer = 8; // thrown_timer
+        }
+        ObjType::Springboard => {
+            if thrown {
+                OBJ[obj].timer = 5;
+            }
+        }
+        _ => {}
+    }
+}
+
+unsafe fn release_holding(i: usize, obj: usize, sx: Fix32, sy: Fix32, thrown: bool) {
+    OBJ[obj].held = false;
+    OBJ[obj].spd.x = sx;
+    OBJ[obj].spd.y = sy;
+    obj_on_release(obj, thrown);
+    psfx(7, 24, 6);
+    OBJ[i].holding = NONE;
+}
+
 unsafe fn player_update(i: usize) {
     let on_ground = check_solid(i, Fix32::ZERO, fi(1));
     if on_ground {
@@ -796,6 +941,16 @@ unsafe fn player_update(i: usize) {
                     player_wall_jump(i, 1);
                 } else if OBJ[i].t_grapple_jump_grace > 0 {
                     player_grapple_jump(i);
+                }
+            }
+            // throw / drop a held object
+            let hold = OBJ[i].holding;
+            if hold != NONE && !GRAP_HELD && !check_solid(hold, Fix32::ZERO, fi(-2)) {
+                OBJ[hold].y -= fi(2);
+                if held(IN_DOWN) {
+                    release_holding(i, hold, fi(2 * OBJ[i].facing), Fix32::ZERO, false);
+                } else {
+                    release_holding(i, hold, fi(4 * OBJ[i].facing), fi(-1), true);
                 }
             }
             // throw grapple
@@ -920,6 +1075,73 @@ unsafe fn player_update(i: usize) {
                 OBJ[i].t_grapple_pickup += 1;
             }
         }
+        1 => {
+            // lift a grappled holdable up to carry height
+            let h = OBJ[i].grapple_hit;
+            if h == NONE {
+                OBJ[i].state = 0;
+            } else {
+                OBJ[h].x = approach(OBJ[h].x, OBJ[i].x - fi(4), fi(4));
+                OBJ[h].y = approach(OBJ[h].y, OBJ[i].y - fi(14), fi(4));
+                if OBJ[h].x == OBJ[i].x - fi(4) && OBJ[h].y == OBJ[i].y - fi(14) {
+                    OBJ[i].state = 0;
+                    OBJ[i].holding = h;
+                }
+            }
+        }
+        2 => {
+            // springboard bounce: settle onto it, then spring
+            let sb = OBJ[i].link;
+            if sb == NONE {
+                OBJ[i].state = 0;
+            } else {
+                let at_x = approach(OBJ[i].x, OBJ[sb].x + fi(4), fx(0.5));
+                move_x_exact(i, at_x - OBJ[i].x);
+                let at_y = approach(OBJ[i].y, OBJ[sb].y + fi(4), fx(0.2));
+                move_y_exact(i, at_y - OBJ[i].y);
+                if OBJ[sb].spr == fi(11) && OBJ[i].y >= OBJ[sb].y + fi(2) {
+                    OBJ[sb].spr = fi(12);
+                } else if OBJ[i].y == OBJ[sb].y + fi(4) {
+                    let by = OBJ[sb].y + fi(4);
+                    player_spring(i, by);
+                    OBJ[sb].spr = fi(11);
+                }
+            }
+        }
+        12 => {
+            // pull a grappled holdable toward the player
+            let obj = OBJ[i].grapple_hit;
+            if obj == NONE {
+                OBJ[i].state = 0;
+            } else {
+                let dir = OBJ[i].grapple_dir;
+                if move_x(obj, fi(-dir * 6), Collide::Stop) {
+                    OBJ[i].state = 0;
+                    OBJ[i].grapple_retract = true;
+                    obj_on_release(obj, dir != 0);
+                    OBJ[obj].held = false;
+                    return;
+                } else {
+                    OBJ[i].grapple_x = approach(OBJ[i].grapple_x, OBJ[i].x, fi(6));
+                }
+                if OBJ[obj].y != OBJ[i].y - fi(7) {
+                    let d = sign(OBJ[i].y - OBJ[obj].y - fi(7)) * fx(0.5);
+                    move_y(obj, d, Collide::Stop);
+                }
+                OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, Fix32::ZERO, fx(0.6));
+                if overlaps(i, obj, Fix32::ZERO, Fix32::ZERO) {
+                    OBJ[i].state = 1;
+                    psfx(7, 16, 6);
+                }
+                let off = (OBJ[obj].y - OBJ[i].y + fi(7)).abs() > fi(8)
+                    || sign(OBJ[obj].x + fi(4) - OBJ[i].x) == fi(-dir);
+                if !GRAP_HELD || off {
+                    OBJ[i].state = 0;
+                    OBJ[i].grapple_retract = true;
+                    release_holding(i, obj, fi(-dir * 5), Fix32::ZERO, true);
+                }
+            }
+        }
         99 | 100 => {
             OBJ[i].wipe_timer += 1;
             if OBJ[i].wipe_timer > 20 {
@@ -940,6 +1162,13 @@ unsafe fn player_update(i: usize) {
     let sy = OBJ[i].spd.y;
     move_x(i, sx, collide);
     move_y(i, sy, collide);
+
+    // carry a held object
+    if OBJ[i].holding != NONE {
+        let h = OBJ[i].holding;
+        OBJ[h].x = OBJ[i].x - fi(4);
+        OBJ[h].y = OBJ[i].y - fi(14);
+    }
 
     // sprite
     if OBJ[i].state != 11 {
@@ -980,6 +1209,48 @@ unsafe fn player_update(i: usize) {
                     OBJ[j].link = i; // collected -> follow player
                     OBJ[j].timer = 0;
                     psfx(7, 12, 4);
+                }
+            }
+            ObjType::Snowball => {
+                if !OBJ[j].held {
+                    if bounce_check(i, j) && snowball_bounce_overlaps(j, i) {
+                        player_bounce(i, OBJ[j].x + fi(4), OBJ[j].y);
+                        psfx(17, 0, 2);
+                        OBJ[j].freeze = 1;
+                        OBJ[j].spd.y = fi(-1);
+                        snowball_hurt(j);
+                    } else if OBJ[j].spd.x != Fix32::ZERO
+                        && OBJ[j].timer <= 0
+                        && overlaps(i, j, Fix32::ZERO, Fix32::ZERO)
+                    {
+                        player_die(i);
+                        return;
+                    }
+                }
+            }
+            ObjType::Springboard => {
+                if OBJ[i].state != 2
+                    && !OBJ[j].held
+                    && overlaps(i, j, Fix32::ZERO, Fix32::ZERO)
+                    && bounce_check(i, j)
+                {
+                    OBJ[i].state = 2;
+                    OBJ[i].spd = VZ;
+                    OBJ[i].t_jump_grace = 0;
+                    OBJ[i].rem.y = Fix32::ZERO;
+                    OBJ[i].link = j; // springboard ref
+                    OBJ[j].link = i; // springboard.player = self
+                    move_y_exact(i, OBJ[j].y + fi(4) - OBJ[i].y);
+                }
+            }
+            ObjType::Crumble => {
+                if !OBJ[j].breaking
+                    && OBJ[i].state == 0
+                    && overlaps(i, j, Fix32::ZERO, fi(1))
+                {
+                    OBJ[j].breaking = true;
+                    OBJ[j].timer = 0;
+                    psfx(8, 20, 4);
                 }
             }
             ObjType::Checkpoint => {
@@ -1083,6 +1354,7 @@ unsafe fn obj_update(i: usize) {
             if OBJ[i].held {
                 return;
             }
+            OBJ[i].timer -= 1; // thrown_timer
             if OBJ[i].stop {
                 OBJ[i].spd.x = approach(OBJ[i].spd.x, Fix32::ZERO, fx(0.125));
                 if OBJ[i].spd.x == Fix32::ZERO {
@@ -1129,6 +1401,11 @@ unsafe fn obj_update(i: usize) {
             let sy = OBJ[i].spd.y;
             move_x(i, sx, Collide::Stop);
             move_y(i, sy, Collide::Stop);
+            // carry the player riding it
+            if OBJ[i].link != NONE {
+                let p = OBJ[i].link;
+                move_y(p, OBJ[i].spd.y, Collide::Stop);
+            }
             if OBJ[i].y > fi(LVL_H * 8 + 24) {
                 OBJ[i].destroyed = true;
             }
@@ -1175,7 +1452,7 @@ unsafe fn obj_update(i: usize) {
                     OBJ[i].timer = 0;
                 }
                 if OBJ[i].timer > 6 || OBJ[p].x > fi(LVL_W * 8 - 7) {
-                    psfx(8, 8, 8);
+                    psfx_lock(8, 8, 8, 40);
                     OBJ[i].stop = true;
                     OBJ[i].timer = 0;
                 }
@@ -1287,6 +1564,11 @@ unsafe fn restart_level() {
     HAVE_GRAPPLE = LVL_INDEX > 2; // levels 1-2: pick the grapple up in-level
     FREEZE = 0;
     SHAKE = 0;
+    // Re-copy the level into the scratch tilemap each restart (the previous
+    // pass blanked spawn tiles in place; without this, a respawn finds none).
+    let m = &LEVELS[LVL_INDEX as usize];
+    let n = m.tiles.len().min(LEVEL_BUF.len());
+    LEVEL_BUF[..n].copy_from_slice(&m.tiles[..n]);
     let mut spawned_player = false;
     for ty in 0..LVL_H {
         for tx in 0..LVL_W {
@@ -1314,7 +1596,10 @@ unsafe fn restart_level() {
 
 pub fn init() {
     unsafe {
+        rng::srand(42);
+        init_particles();
         CUR_MUSIC = -1;
+        FRAMES = 0;
         goto_level(1);
     }
 }
@@ -1322,6 +1607,7 @@ pub fn init() {
 pub fn update() {
     unsafe {
         FRAMES += 1;
+        SFX_TIMER = (SFX_TIMER - 1).max(0);
         update_input();
         if FREEZE > 0 {
             FREEZE -= 1;
@@ -1356,6 +1642,7 @@ pub fn draw() {
     unsafe {
         let shake_y = if SHAKE > 0 { -1 } else { 0 };
         backend::camera(CAM_X as i16, (CAM_Y + shake_y) as i16);
+        draw_clouds(); // background
         let cam_col = CAM_X / 8;
         let cam_row = CAM_Y / 8;
         let cols = 18.min(LVL_W - cam_col);
@@ -1373,5 +1660,6 @@ pub fn draw() {
                 backend::spr(o.spr.floor_int(), o.x.to_int() as i16, o.y.to_int() as i16, o.flip_x, o.flip_y);
             }
         }
+        draw_snow(); // foreground
     }
 }
