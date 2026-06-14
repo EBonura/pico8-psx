@@ -21,7 +21,7 @@ use crate::assets::tilemap::TILE_FLAGS;
 use pico8::backend::{self, Cart};
 use pico8::fixed::{fx, Fix32};
 use pico8::sfx;
-use pico8::util::{approach, sign};
+use pico8::util::{approach, clamp, sign};
 
 #[inline]
 fn fi(n: i32) -> Fix32 {
@@ -118,9 +118,9 @@ fn consume_grapple_press() -> bool {
     }
 }
 
-// ---- audio (sub-range off/len not yet modelled; play whole sfx) ----
-fn psfx(id: i32) {
-    sfx::play(id);
+// ---- audio: PICO-8 psfx(id, off, len) -> a sub-range of sfx `id` ----
+fn psfx(id: i32, off: i32, len: i32) {
+    sfx::play_range(id, off, len);
 }
 fn music(n: i32) {
     sfx::music(n, 0, 0);
@@ -284,6 +284,10 @@ static mut HAVE_GRAPPLE: bool = false;
 static mut FREEZE: i32 = 0;
 static mut SHAKE: i32 = 0;
 static mut CAM_X: i32 = 0;
+static mut CAM_Y: i32 = 0;
+static mut CAM_MODE: i32 = 1;
+static mut FRAMES: i32 = 0; // for time()-driven wobble
+static mut SCARF: [Vec2; 5] = [VZ; 5];
 
 fn new_slot() -> usize {
     unsafe {
@@ -554,7 +558,7 @@ unsafe fn player_die(i: usize) {
     OBJ[i].state = 99;
     FREEZE = 2;
     SHAKE = 5;
-    psfx(14);
+    psfx(14, 16, 16);
 }
 
 // ====================================================================
@@ -572,6 +576,7 @@ unsafe fn init_obj(i: usize) {
             OBJ[i].hit_h = fi(6);
             OBJ[i].spr = fi(2);
             PLAYER = i;
+            SCARF = [Vec2 { x: OBJ[i].x, y: OBJ[i].y }; 5];
         }
         ObjType::SpikeV => {
             if !check_solid(i, Fix32::ZERO, fi(1)) {
@@ -661,7 +666,7 @@ unsafe fn player_jump(i: usize) {
     OBJ[i].auto_var_jump = false;
     let snap = OBJ[i].jump_grace_y - OBJ[i].y;
     move_y_exact(i, snap);
-    psfx(7);
+    psfx(7, 0, 4);
 }
 
 unsafe fn player_wall_jump(i: usize, dir: i32) {
@@ -674,12 +679,12 @@ unsafe fn player_wall_jump(i: usize, dir: i32) {
     OBJ[i].auto_var_jump = false;
     OBJ[i].facing = dir;
     move_x_exact(i, fi(-dir * 3));
-    psfx(7);
+    psfx(7, 4, 4);
 }
 
 unsafe fn player_grapple_jump(i: usize) {
     consume_jump_press();
-    psfx(17);
+    psfx(17, 2, 3);
     OBJ[i].state = 0;
     OBJ[i].t_grapple_jump_grace = 0;
     OBJ[i].spd.y = fi(-3);
@@ -706,7 +711,7 @@ unsafe fn start_grapple(i: usize) {
     OBJ[i].t_var_jump = 0;
     OBJ[i].grapple_dir = if INPUT_X != 0 { INPUT_X } else { OBJ[i].facing };
     OBJ[i].facing = OBJ[i].grapple_dir;
-    psfx(8);
+    psfx(8, 0, 5);
 }
 
 /// grapple_check: 0 = nothing, 1 = hit, 2 = fail. Sets grapple_hit.
@@ -827,12 +832,12 @@ unsafe fn player_update(i: usize) {
                     OBJ[i].grapple_wave = fi(2);
                     OBJ[i].grapple_boost = false;
                     OBJ[i].freeze = 2;
-                    psfx(14);
+                    psfx(14, 0, 5);
                     break;
                 }
                 let new_dist = (OBJ[i].grapple_x - OBJ[i].x).abs();
                 if hit == 2 || (hit == 0 && new_dist >= fi(64)) {
-                    psfx(if hit == 2 { 7 } else { 14 });
+                    psfx(if hit == 2 { 7 } else { 14 }, 8, 3);
                     OBJ[i].grapple_retract = true;
                     OBJ[i].freeze = 2;
                     OBJ[i].state = 0;
@@ -863,7 +868,7 @@ unsafe fn player_update(i: usize) {
             }
             if OBJ[i].spr != fi(4) && check_solid(i, fi(OBJ[i].grapple_dir), Fix32::ZERO) {
                 OBJ[i].spr = fi(4);
-                psfx(14);
+                psfx(14, 8, 3);
             }
             if consume_jump_press() {
                 if check_solid(i, fi(OBJ[i].grapple_dir * 2), Fix32::ZERO) {
@@ -958,7 +963,7 @@ unsafe fn player_update(i: usize) {
                 if overlaps(i, j, Fix32::ZERO, Fix32::ZERO) {
                     OBJ[j].destroyed = true;
                     HAVE_GRAPPLE = true;
-                    psfx(7);
+                    psfx(7, 12, 4);
                     OBJ[i].state = 50;
                 }
             }
@@ -967,14 +972,14 @@ unsafe fn player_update(i: usize) {
                     OBJ[j].falling = true;
                     OBJ[i].freeze = 1;
                     SHAKE = 2;
-                    psfx(8);
+                    psfx(8, 16, 4);
                 }
             }
             ObjType::Berry => {
                 if overlaps(i, j, Fix32::ZERO, Fix32::ZERO) && OBJ[j].link == NONE && OBJ[j].timer == 0 && !OBJ[j].stop {
                     OBJ[j].link = i; // collected -> follow player
                     OBJ[j].timer = 0;
-                    psfx(7);
+                    psfx(7, 12, 4);
                 }
             }
             ObjType::Checkpoint => {
@@ -1008,9 +1013,42 @@ unsafe fn player_update(i: usize) {
 
 unsafe fn player_draw(i: usize) {
     let o = OBJ[i];
+
+    // death fx: an expanding ring of shrinking circles
     if o.state == 99 {
-        return; // death fx omitted for now
+        let e = fi(o.wipe_timer) / fi(10);
+        if e <= fi(1) {
+            let dx = clamp(o.x, fi(CAM_X), fi(CAM_X + 128));
+            let dy = clamp(o.y - fi(4), Fix32::ZERO, fi(128));
+            let r = ((fi(1) - e) * fi(8)).to_int() as i16;
+            for k in 0..8 {
+                let ang = fi(k) / fi(8);
+                let cx = (dx + ang.cos() * fi(32) * e).to_int() as i16;
+                let cy = (dy + ang.sin() * fi(32) * e).to_int() as i16;
+                backend::circfill(cx, cy, r, 10);
+            }
+        }
+        return;
     }
+
+    // scarf: 5 damped trailing segments (PICO-8 colour 10)
+    let t = fi(FRAMES) / fi(60);
+    let mut last = Vec2 { x: o.x - fi(o.facing), y: o.y - fi(3) };
+    for k in 1..=5 {
+        let mut s = SCARF[k - 1];
+        s.x += (last.x - s.x - fi(o.facing)) / fx(1.5);
+        let ki = fi(k as i32);
+        let wob = (ki * fx(0.25) + t).sin() * ki * fx(0.25);
+        s.y += ((last.y - s.y) + wob) / fi(2);
+        SCARF[k - 1] = s;
+        let (sx, sy) = (s.x.to_int() as i16, s.y.to_int() as i16);
+        backend::rectfill(sx, sy, sx, sy, 10);
+        let mx = ((s.x + last.x) / fi(2)).to_int() as i16;
+        let my = ((s.y + last.y) / fi(2)).to_int() as i16;
+        backend::rectfill(mx, my, mx, my, 10);
+        last = s;
+    }
+
     // grapple rope (simple two-tone line)
     if o.state >= 10 && o.state <= 12 {
         backend::line(o.x.to_int() as i16, (o.y - fi(3)).to_int() as i16, o.grapple_x.to_int() as i16, (o.grapple_y).to_int() as i16, 7);
@@ -1028,7 +1066,7 @@ unsafe fn player_draw(i: usize) {
 unsafe fn snowball_hurt(i: usize) -> bool {
     OBJ[i].hp -= 1;
     if OBJ[i].hp <= 0 {
-        psfx(8);
+        psfx(8, 16, 4);
         OBJ[i].destroyed = true;
         return true;
     }
@@ -1112,7 +1150,7 @@ unsafe fn obj_update(i: usize) {
                     OBJ[i].y = OBJ[i].oy;
                     OBJ[i].breaking = false;
                     OBJ[i].timer = 0;
-                    psfx(17);
+                    psfx(17, 5, 3);
                 }
             }
         }
@@ -1137,7 +1175,7 @@ unsafe fn obj_update(i: usize) {
                     OBJ[i].timer = 0;
                 }
                 if OBJ[i].timer > 6 || OBJ[p].x > fi(LVL_W * 8 - 7) {
-                    psfx(8);
+                    psfx(8, 8, 8);
                     OBJ[i].stop = true;
                     OBJ[i].timer = 0;
                 }
@@ -1152,7 +1190,7 @@ unsafe fn obj_update(i: usize) {
                     OBJ[s].spd.x = fi(OBJ[i].rdir * 2);
                     OBJ[s].spd.y = fi(4);
                 }
-                psfx(17);
+                psfx(17, 5, 3);
             }
         }
         _ => {}
@@ -1163,13 +1201,46 @@ unsafe fn obj_update(i: usize) {
 // Camera
 // ====================================================================
 
+/// The cart's 8 per-level camera modes (barrier/stateful refinements omitted).
+unsafe fn camera_target() -> (i32, i32) {
+    let px = OBJ[PLAYER].x.to_int();
+    let py = OBJ[PLAYER].y.to_int();
+    let wlim = (LVL_W * 8 - 128).max(0);
+    let hlim = (LVL_H * 8 - 128).max(0);
+    let cx = |v: i32| v.max(0).min(wlim);
+    let cy = |v: i32| v.max(0).min(hlim);
+    match CAM_MODE {
+        1 => (if px < 42 { 0 } else { (px - 48).max(40).min(wlim) }, 0),
+        2 => (if px < 120 { 0 } else if px > 136 { 128 } else { px - 64 }, cy(py - 64)),
+        3 => (cx(px - 56), 0),
+        4 => {
+            let sx = if px % 128 > 8 && px % 128 < 120 { (px / 128) * 128 + 64 } else { px };
+            let sy = if py % 128 > 4 && py % 128 < 124 { (py / 128) * 128 + 64 } else { py };
+            (cx(sx - 64), cy(sy - 64))
+        }
+        5 => (cx(px - 32), 0),
+        6 | 7 => (cx(px - 48), 0),
+        8 => (0, cy(py - 32)),
+        _ => (cx(px - 64), 0),
+    }
+}
+
 unsafe fn update_camera() {
     if PLAYER == NONE {
         return;
     }
-    let px = OBJ[PLAYER].x.to_int();
-    let target = (px - 64).clamp(0, (LVL_W * 8 - 128).max(0));
-    CAM_X += (target - CAM_X).clamp(-3, 3);
+    let (tx, ty) = camera_target();
+    CAM_X += (tx - CAM_X).clamp(-3, 3); // PICO-8 5px/frame, ~halved for 60fps
+    CAM_Y += (ty - CAM_Y).clamp(-3, 3);
+}
+
+unsafe fn snap_camera() {
+    if PLAYER == NONE {
+        return;
+    }
+    let (tx, ty) = camera_target();
+    CAM_X = tx;
+    CAM_Y = ty;
 }
 
 // ====================================================================
@@ -1184,6 +1255,7 @@ unsafe fn goto_level(index: i32) {
     let m = &LEVELS[idx as usize];
     LVL_W = m.width;
     LVL_H = m.height;
+    CAM_MODE = m.camera_mode;
     // Copy the level into a mutable scratch tilemap (like the cart's PX9 dest
     // buffer) so restart_level can blank object-spawn tiles from the render.
     let n = m.tiles.len().min(LEVEL_BUF.len());
@@ -1237,6 +1309,7 @@ unsafe fn restart_level() {
             }
         }
     }
+    snap_camera();
 }
 
 pub fn init() {
@@ -1248,6 +1321,7 @@ pub fn init() {
 
 pub fn update() {
     unsafe {
+        FRAMES += 1;
         update_input();
         if FREEZE > 0 {
             FREEZE -= 1;
@@ -1281,10 +1355,12 @@ pub fn update() {
 pub fn draw() {
     unsafe {
         let shake_y = if SHAKE > 0 { -1 } else { 0 };
-        backend::camera(CAM_X as i16, shake_y as i16);
+        backend::camera(CAM_X as i16, (CAM_Y + shake_y) as i16);
         let cam_col = CAM_X / 8;
+        let cam_row = CAM_Y / 8;
         let cols = 18.min(LVL_W - cam_col);
-        backend::map(cam_col, 0, (cam_col * 8) as i16, 0, cols, LVL_H, 0);
+        let rows = 18.min(LVL_H - cam_row);
+        backend::map(cam_col, cam_row, (cam_col * 8) as i16, (cam_row * 8) as i16, cols, rows, 0);
 
         for i in 0..MAX_OBJ {
             let o = OBJ[i];

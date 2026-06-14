@@ -59,8 +59,11 @@ struct Channel {
     tick: i32,
     vibrato_phase: i32,
     keyed_on: bool,
+    stop_at: i32,  // note index to stop at (32 = whole sfx)
+    no_loop: bool, // sub-range playback ignores the sfx's loop points
 }
-const CH0: Channel = Channel { sfx_id: -1, note_pos: 0, tick: 0, vibrato_phase: 0, keyed_on: false };
+const CH0: Channel =
+    Channel { sfx_id: -1, note_pos: 0, tick: 0, vibrato_phase: 0, keyed_on: false, stop_at: 32, no_loop: false };
 
 static mut AUDIO: AudioData = EMPTY_AUDIO;
 static mut CHANNELS: [Channel; 8] = [CH0; 8];
@@ -222,10 +225,10 @@ unsafe fn advance_channel(v: usize) {
         let meta = AUDIO.sfx_meta[CHANNELS[v].sfx_id as usize];
         let loop_end = meta[2] as i32;
         let loop_start = meta[1] as i32;
-        if loop_end > 0 && CHANNELS[v].note_pos >= loop_end {
+        if !CHANNELS[v].no_loop && loop_end > 0 && CHANNELS[v].note_pos >= loop_end {
             CHANNELS[v].note_pos = loop_start;
         }
-        if CHANNELS[v].note_pos >= 32 {
+        if CHANNELS[v].note_pos >= CHANNELS[v].stop_at {
             CHANNELS[v].sfx_id = -1;
             voice_key_off(v);
             return;
@@ -257,6 +260,8 @@ unsafe fn music_advance_pattern() {
         CHANNELS[c].note_pos = 0;
         CHANNELS[c].tick = 0;
         CHANNELS[c].vibrato_phase = 0;
+        CHANNELS[c].stop_at = 32;
+        CHANNELS[c].no_loop = false;
         start_channel_note(c);
     }
 }
@@ -333,8 +338,14 @@ pub fn update() {
     }
 }
 
-/// PICO-8 `sfx(id)` (id < 0 stops all).
+/// PICO-8 `sfx(id)` (id < 0 stops all SFX voices). Plays the whole sfx.
 pub fn play(id: i32) {
+    play_range(id, 0, 32);
+}
+
+/// PICO-8 `sfx(id, _, offset, length)`: play notes `[offset, offset+length)`
+/// of sfx `id` on a free SFX voice (looping disabled for sub-ranges).
+pub fn play_range(id: i32, offset: i32, length: i32) {
     unsafe {
         if id < 0 || id >= 64 {
             for s in 0..NUM_SFX_VOICES {
@@ -356,9 +367,11 @@ pub fn play(id: i32) {
         }
         let v = SFX_VOICE_BASE + slot;
         CHANNELS[v].sfx_id = id;
-        CHANNELS[v].note_pos = 0;
+        CHANNELS[v].note_pos = offset.clamp(0, 31);
         CHANNELS[v].tick = 0;
         CHANNELS[v].vibrato_phase = 0;
+        CHANNELS[v].stop_at = (offset + length).clamp(1, 32);
+        CHANNELS[v].no_loop = length < 32; // sub-range plays once
         start_channel_note(v);
     }
 }
