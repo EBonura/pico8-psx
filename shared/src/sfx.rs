@@ -55,6 +55,55 @@ const MUSIC_STOP: u8 = 0x04;
 // caps at 0x1000 (1/4 of the SPU's 0x4000 range).
 const VOL_TABLE: [u16; 8] = [0x0000, 0x0250, 0x0490, 0x06D0, 0x0920, 0x0B60, 0x0DB0, 0x1000];
 
+// --- direct SPU MMIO for hardware noise (instrument 6) ---------------------
+// PICO-8's noise is continuous LFSR hiss; a looped sample wavetable just buzzes
+// at a pitch, so percussion is lost. The PS1 SPU has a hardware noise generator:
+// set a voice's bit in NON (Noise ON) and it outputs LFSR noise instead of its
+// sample, clocked by SPUCNT's 6-bit noise rate (bits 8..13). The SDK keeps these
+// registers private, so we drive them directly (all our voices are 0..7 < 16, so
+// only the low NON word matters).
+const NON_REG: u32 = 0x1F80_1D94; // Noise ON, voices 0..15
+const SPUCNT_REG: u32 = 0x1F80_1DAA;
+static mut NOISE_MASK: u16 = 0;
+
+#[inline]
+fn reg_write16(addr: u32, v: u16) {
+    unsafe { core::ptr::write_volatile(addr as *mut u16, v) }
+}
+#[inline]
+fn reg_read16(addr: u32) -> u16 {
+    unsafe { core::ptr::read_volatile(addr as *const u16) }
+}
+
+/// Put voice `v` into (or out of) hardware-noise mode.
+unsafe fn set_voice_noise(v: usize, on: bool) {
+    let bit = 1u16 << v;
+    let was = NOISE_MASK;
+    if on {
+        NOISE_MASK |= bit;
+    } else {
+        NOISE_MASK &= !bit;
+    }
+    if NOISE_MASK != was {
+        reg_write16(NON_REG, NOISE_MASK);
+    }
+}
+
+/// SPUCNT noise-rate field (bits 8..13) for a PICO-8 noise note `pitch` (0..63).
+/// Higher rate value = higher NoiseShift = LOWER frequency, so map a higher
+/// PICO-8 pitch (brighter) to a lower shift. step (bits 0..1) kept at 2.
+fn noise_clock(pitch: i32) -> u16 {
+    let shift = (14 - pitch / 4).clamp(1, 15) as u16;
+    (shift << 2) | 0x02
+}
+
+/// Set the global SPU noise frequency from a noise note's pitch (last writer
+/// wins; percussion is normally one voice).
+unsafe fn set_noise_freq(pitch: i32) {
+    let cnt = reg_read16(SPUCNT_REG) & !0x3F00;
+    reg_write16(SPUCNT_REG, cnt | (noise_clock(pitch) << 8));
+}
+
 #[derive(Clone, Copy)]
 struct Channel {
     sfx_id: i32, // -1 = inactive
@@ -107,6 +156,7 @@ unsafe fn voice_key_off(v: usize) {
         Voice::key_off(1 << v);
         CHANNELS[v].keyed_on = false;
     }
+    set_voice_noise(v, false);
 }
 
 unsafe fn start_channel_note(v: usize) {
@@ -117,10 +167,23 @@ unsafe fn start_channel_note(v: usize) {
         voice_key_off(v);
         return;
     }
-    let spu_vol = VOL_TABLE[vol as usize] as i16;
-    let spu_pitch = get_pitch(sfx_pitch(note), sfx_instr(note));
-    let addr = WAVEFORM_ADDR[(sfx_instr(note) & 7) as usize];
+    let instr = sfx_instr(note);
+    // Hardware noise reads ~1.4x hotter than a sample voice at the same level
+    // (calibrated against PICO-8's percussion via the synthtest drums song), so
+    // scale it to 0.70 to match.
+    let spu_vol = if instr == 6 {
+        ((VOL_TABLE[vol as usize] as i32 * 45) / 64) as i16
+    } else {
+        VOL_TABLE[vol as usize] as i16
+    };
+    let spu_pitch = get_pitch(sfx_pitch(note), instr);
+    let addr = WAVEFORM_ADDR[(instr & 7) as usize];
     voice_key_off(v);
+    // Instrument 6 = hardware LFSR noise (real hiss); all others = sample voice.
+    set_voice_noise(v, instr == 6);
+    if instr == 6 {
+        set_noise_freq(sfx_pitch(note));
+    }
     let voice = Voice::new(v as u8);
     voice.set_volume(Volume(spu_vol), Volume(spu_vol));
     voice.set_pitch(Pitch::raw(spu_pitch));

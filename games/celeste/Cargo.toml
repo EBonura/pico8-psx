@@ -21,6 +21,10 @@ path = "src/bin/musictest.rs"
 name = "soundtest"
 path = "src/bin/soundtest.rs"
 
+[[bin]]
+name = "synthtest"
+path = "src/bin/synthtest.rs"
+
 [profile.release]
 # no_std has no unwinder; abort keeps the binary small.
 panic         = "abort"

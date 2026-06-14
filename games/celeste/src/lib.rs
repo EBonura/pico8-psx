@@ -153,3 +153,39 @@ pub fn run_music_test(pattern: i32) {
         gpu::vsync();
     }
 }
+
+/// Matched-test AudioData: the synthtest songs (tools/synthtest_gen.py) on
+/// Celeste's real waveforms + pitch table. Lets us replicate, on the PSX engine,
+/// the exact same isolated songs a PICO-8 cart plays, and diff them.
+const SYNTH_AUDIO: AudioData = AudioData {
+    waveform_adpcm: &WAVEFORM_ADPCM,
+    waveform_offset: &WAVEFORM_OFFSET,
+    sfx_meta: &assets::synthtest_data::TEST_SFX_META,
+    sfx_notes: &assets::synthtest_data::TEST_SFX_NOTES,
+    spu_pitch_table: &SPU_PITCH_TABLE,
+    music_patterns: &assets::synthtest_data::TEST_MUSIC,
+    music_pattern_count: assets::synthtest_data::NUM_SONGS as i32,
+};
+
+/// Play each synthtest song for SONG_FRAMES then GAP_FRAMES of silence, in order,
+/// looping -- the same sequence + timing the PICO-8 synthtest cart records, so the
+/// host capture splits on the gaps and each song is compared note-for-note.
+pub fn run_synth_test() {
+    use assets::synthtest_data::{GAP_FRAMES, NUM_SONGS, SONG_FRAMES};
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(SYNTH_AUDIO);
+    loop {
+        for song in 0..NUM_SONGS {
+            sfx::music(song as i32, 0, 0);
+            for _ in 0..SONG_FRAMES {
+                sfx::update();
+                gpu::vsync();
+            }
+            sfx::music(-1, 0, 0);
+            for _ in 0..GAP_FRAMES {
+                sfx::update();
+                gpu::vsync();
+            }
+        }
+    }
+}
