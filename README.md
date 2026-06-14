@@ -105,6 +105,27 @@ render, verified end-to-end in the PSoXide emulator (boot -> select -> launch
   level 1's opening trailhead screen from the actual tilemap (render bring-up;
   the grapple/physics port comes next).
 
+## Audio reference
+
+To keep the PSX SPU synthesis faithful, `tools/record_pico8_sfx.py` captures
+PICO-8's *actual* per-SFX output as ground-truth WAVs to compare against.
+
+PICO-8's headless WAV export (`pico8 cart -export foo%d.wav`) writes correctly-
+sized but **silent** files -- the synth doesn't run without a real audio device.
+So the tool instead drives a *windowed* PICO-8 with a generated recorder cart
+that, for each non-empty SFX, calls `extcmd("audio_rec")`, plays it, waits its
+exact duration (read from the silent export), and `extcmd("audio_end")` to save
+a WAV. Source carts live in each game's `assets-src/*.p8.png`; the captures land
+in `audio-ref/<game>/sfx/` (gitignored -- regenerable):
+
+```sh
+python3 tools/record_pico8_sfx.py games/celeste/assets-src/celeste.p8.png \
+    --prefix c1 --out audio-ref/celeste/sfx     # opens PICO-8, ~4 min real-time
+```
+
+The PSX side is captured from the PSoXide emulator (`bus.run_spu_samples` +
+`bus.spu.drain_audio()` -> WAV) and diffed against these references.
+
 ## Assets
 
 PICO-8 graphics are converted to the PS1 4bpp arrays each game uploads to VRAM

@@ -9,6 +9,10 @@ target/
 *.cue
 *.toc
 
+# Reference audio captures (regenerable from the carts via tools/record_pico8_sfx.py)
+audio-ref/
+*.wav
+
 # AI agent / editor scratch (kept local, never committed)
 CLAUDE.md
 AGENTS.md
