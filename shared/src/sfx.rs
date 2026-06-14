@@ -42,6 +42,12 @@ const EMPTY_AUDIO: AudioData = AudioData {
 const SPU_WAVEFORM_BASE: u32 = 0x1000;
 const NUM_SFX_VOICES: usize = 4;
 const SFX_VOICE_BASE: usize = 4;
+// The phaser (instrument 7) is two triangles a hair apart that beat. We can't do
+// that with one static wavetable, so a phaser note also keys a "buddy" voice
+// (v + 8, i.e. voices 8..15, otherwise unused) playing a detuned triangle.
+const PHASER_BUDDY: usize = 8;
+const PHASER_DETUNE_NUM: i32 = 109; // buddy freq = pitch * 109/110 (zepto8)
+const PHASER_DETUNE_DEN: i32 = 110;
 
 const TICK_INC: i32 = 256;
 const TICK_PER_SPEED: i32 = 128;
@@ -158,7 +164,8 @@ fn get_pitch(key: i32, instr: i32) -> u16 {
 
 unsafe fn voice_key_off(v: usize) {
     if CHANNELS[v].keyed_on {
-        Voice::key_off(1 << v);
+        // Also release the phaser buddy (harmless if this note wasn't a phaser).
+        Voice::key_off((1 << v) | (1 << (v + PHASER_BUDDY)));
         CHANNELS[v].keyed_on = false;
     }
     set_voice_noise(v, false);
@@ -190,6 +197,28 @@ unsafe fn start_channel_note(v: usize) {
         set_noise_freq(sfx_pitch(note));
     }
     let voice = Voice::new(v as u8);
+    if instr == 7 {
+        // Phaser = two triangles (instrument 0) a hair apart (109/110), summed 2:1.
+        // PICO-8's phaser is triangle-like (fundamental + odd harmonics) with the
+        // two oscillators beating; a single static wavetable can't sweep, so we
+        // key a detuned triangle buddy alongside the primary triangle.
+        let tri = WAVEFORM_ADDR[0];
+        let va = (spu_vol as i32 * 2 / 3) as i16;
+        let vb = (spu_vol as i32 / 3) as i16;
+        voice.set_volume(Volume(va), Volume(va));
+        voice.set_pitch(Pitch::raw(spu_pitch));
+        voice.set_start_addr(SpuAddr::new(tri));
+        let buddy = v + PHASER_BUDDY;
+        let bv = Voice::new(buddy as u8);
+        bv.set_volume(Volume(vb), Volume(vb));
+        bv.set_pitch(Pitch::raw(
+            (spu_pitch as i32 * PHASER_DETUNE_NUM / PHASER_DETUNE_DEN) as u16,
+        ));
+        bv.set_start_addr(SpuAddr::new(tri));
+        Voice::key_on((1 << v) | (1 << buddy));
+        CHANNELS[v].keyed_on = true;
+        return;
+    }
     voice.set_volume(Volume(spu_vol), Volume(spu_vol));
     voice.set_pitch(Pitch::raw(spu_pitch));
     voice.set_start_addr(SpuAddr::new(addr));
