@@ -121,9 +121,29 @@ struct Channel {
     keyed_on: bool,
     stop_at: i32,  // note index to stop at (32 = whole sfx)
     no_loop: bool, // sub-range playback ignores the sfx's loop points
+    // Custom (SFX-as-instrument) sub-sequencer: when the current note's custom
+    // flag is set, instrument K = one of SFX 0..7 is played as a macro (its own
+    // waveform + volume-envelope + pitch over its own ticks) under this note.
+    custom_k: i32,    // -1 = not a custom note, else the custom SFX 0..7
+    custom_pos: i32,  // position within the custom SFX
+    custom_tick: i32, // tick within the custom SFX
+    note_pitch: i32,  // the main note's pitch (custom pitch is relative to this)
+    note_vol: i32,    // the main note's volume 0..7 (scales the custom envelope)
 }
-const CH0: Channel =
-    Channel { sfx_id: -1, note_pos: 0, tick: 0, vibrato_phase: 0, keyed_on: false, stop_at: 32, no_loop: false };
+const CH0: Channel = Channel {
+    sfx_id: -1,
+    note_pos: 0,
+    tick: 0,
+    vibrato_phase: 0,
+    keyed_on: false,
+    stop_at: 32,
+    no_loop: false,
+    custom_k: -1,
+    custom_pos: 0,
+    custom_tick: 0,
+    note_pitch: 0,
+    note_vol: 0,
+};
 
 static mut AUDIO: AudioData = EMPTY_AUDIO;
 static mut CHANNELS: [Channel; 8] = [CH0; 8];
@@ -154,6 +174,10 @@ fn sfx_vol(n: u16) -> i32 {
 fn sfx_effect(n: u16) -> i32 {
     ((n >> 12) & 0x7) as i32
 }
+#[inline]
+fn sfx_is_custom(n: u16) -> bool {
+    (n >> 15) & 1 != 0 // bit 15: instrument field is a custom SFX (0..7), not an osc
+}
 
 #[inline]
 fn get_pitch(key: i32, instr: i32) -> u16 {
@@ -173,15 +197,100 @@ unsafe fn voice_key_off(v: usize) {
     set_voice_noise(v, false);
 }
 
+/// Program voice `v` from the current step of its custom-instrument SFX: the
+/// custom SFX supplies the oscillator, a volume envelope (scaling the main note's
+/// volume) and a pitch relative to its own first note (added to the main pitch).
+/// `keyon` re-triggers the sample (note start / waveform change); otherwise only
+/// volume + pitch are updated, so the envelope sustains without clicks.
+unsafe fn custom_set_voice(v: usize, keyon: bool) {
+    let ch = CHANNELS[v];
+    let k = ch.custom_k as usize;
+    let cnote = AUDIO.sfx_notes[k][(ch.custom_pos & 31) as usize];
+    let cvol = sfx_vol(cnote);
+    if cvol == 0 {
+        voice_key_off(v);
+        return;
+    }
+    let cwave = sfx_instr(cnote);
+    let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
+    let played = (ch.note_pitch + sfx_pitch(cnote) - base).clamp(0, 63);
+    let spu_vol = (VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7) as i16;
+    let spu_pitch = get_pitch(played, cwave);
+    let voice = Voice::new(v as u8);
+    if keyon {
+        set_voice_noise(v, cwave == 6);
+        if cwave == 6 {
+            set_noise_freq(played);
+        }
+        voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+        voice.set_pitch(Pitch::raw(spu_pitch));
+        voice.set_start_addr(SpuAddr::new(WAVEFORM_ADDR[(cwave & 7) as usize]));
+        Voice::key_on(1 << v);
+        CHANNELS[v].keyed_on = true;
+    } else {
+        if cwave == 6 {
+            set_noise_freq(played);
+        }
+        voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+        voice.set_pitch(Pitch::raw(spu_pitch));
+    }
+}
+
+/// Step a channel's custom-instrument macro one frame (independent of the main
+/// note's tick). The macro runs at the custom SFX's own speed and loops.
+unsafe fn advance_custom(v: usize) {
+    if CHANNELS[v].sfx_id < 0 {
+        CHANNELS[v].custom_k = -1;
+        return;
+    }
+    if CHANNELS[v].custom_k < 0 {
+        return;
+    }
+    let k = CHANNELS[v].custom_k as usize;
+    let meta = AUDIO.sfx_meta[k];
+    let speed = (meta[0] as i32).max(1);
+    let threshold = speed * TICK_PER_SPEED;
+    CHANNELS[v].custom_tick += TICK_INC;
+    let mut stepped = false;
+    while CHANNELS[v].custom_tick >= threshold {
+        CHANNELS[v].custom_tick -= threshold;
+        CHANNELS[v].custom_pos += 1;
+        let ls = meta[1] as i32;
+        let le = meta[2] as i32;
+        if le > 0 && CHANNELS[v].custom_pos >= le {
+            CHANNELS[v].custom_pos = ls; // loop the sustain region
+        } else if CHANNELS[v].custom_pos >= 32 {
+            CHANNELS[v].custom_pos = 31; // no loop: hold the last step
+        }
+        stepped = true;
+    }
+    if stepped {
+        custom_set_voice(v, false);
+    }
+}
+
 unsafe fn start_channel_note(v: usize) {
     let ch = CHANNELS[v];
     let note = AUDIO.sfx_notes[ch.sfx_id as usize][ch.note_pos as usize];
     let vol = sfx_vol(note);
     if vol == 0 {
         voice_key_off(v);
+        CHANNELS[v].custom_k = -1;
         return;
     }
     let instr = sfx_instr(note);
+    if sfx_is_custom(note) {
+        // Custom instrument: play SFX `instr` as a macro under this note.
+        CHANNELS[v].custom_k = instr;
+        CHANNELS[v].custom_pos = 0;
+        CHANNELS[v].custom_tick = 0;
+        CHANNELS[v].note_pitch = sfx_pitch(note);
+        CHANNELS[v].note_vol = vol;
+        voice_key_off(v);
+        custom_set_voice(v, true);
+        return;
+    }
+    CHANNELS[v].custom_k = -1;
     // Hardware noise: a 0.70 base (it reads ~1.4x hotter than a sample voice),
     // times a pitch-loudness factor -- PICO-8's noise gets ~2.6x louder from low
     // to high pitch (measured), so a flat level made the drums all the same.
@@ -233,8 +342,8 @@ unsafe fn start_channel_note(v: usize) {
 
 unsafe fn apply_effects(v: usize) {
     let ch = CHANNELS[v];
-    if ch.sfx_id < 0 {
-        return;
+    if ch.sfx_id < 0 || ch.custom_k >= 0 {
+        return; // custom-instrument notes are driven by advance_custom instead
     }
     let note = AUDIO.sfx_notes[ch.sfx_id as usize][ch.note_pos as usize];
     let effect = sfx_effect(note);
@@ -341,6 +450,7 @@ unsafe fn advance_channel(v: usize) {
         start_channel_note(v);
     }
     apply_effects(v);
+    advance_custom(v);
 }
 
 /// Total ticks the current pattern lasts. PICO-8 rule: the leftmost active

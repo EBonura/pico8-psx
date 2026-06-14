@@ -54,6 +54,12 @@ def instruments_test():  # 4 sustained notes of each instrument 0..7 (pitch24 vo
         out += [(24,inst,5,0)]*4
     return out  # 32 notes
 
+def instruments_hi():  # 4 sustained notes of each instrument 0..7 at pitch 48
+    out=[]
+    for inst in range(8):
+        out += [(48,inst,5,0)]*4
+    return out
+
 def noise_pitch_test():  # noise (instr 6) at a pitch sweep, vol 5
     out=[]
     for p in [4,12,20,28,36,44,52,60]:
@@ -76,6 +82,7 @@ SFX = [
     mksfx(16, drop_test()),  # 7: drop (effect 3)
     mksfx(16, instruments_test()), # 8: each instrument sustained
     mksfx(16, noise_pitch_test()), # 9: noise across the pitch range
+    mksfx(16, instruments_hi()),   # 10: each instrument at pitch 48
 ]
 # music patterns: (flags, [sfx_or_None x4])  -- one pattern per song here
 SONGS = [
@@ -88,6 +95,7 @@ SONGS = [
     (0, [7, None, None, None]),   # song6: drop
     (0, [8, None, None, None]),   # song7: each instrument sustained
     (0, [9, None, None, None]),   # song8: noise pitch sweep
+    (0, [10, None, None, None]),  # song9: instruments at pitch 48
 ]
 SONG_NAMES = ["scale", "drums", "trio", "slide", "vibrato", "arp", "drop", "instruments", "noisepitch"]
 
