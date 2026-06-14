@@ -61,13 +61,28 @@ fn main() {
     bus.cdrom.insert_disc(Some(disc));
     bus.attach_digital_pad_port1();
 
+    // Optional: press Cross (0x4000) for ~0.4s starting at this second, to drive
+    // a title screen into gameplay before/while capturing.
+    let press_at: f32 = arg("--press-at").and_then(|s| s.parse().ok()).unwrap_or(-1.0);
+
     let skip_samples = (skip * SAMPLE_RATE as f32) as usize;
     let target = skip_samples + (seconds * SAMPLE_RATE as f32) as usize;
     let mut samples: Vec<(i16, i16)> = Vec::with_capacity(target);
     let mut accum = 0u64;
     let mut steps = 0u64;
+    let mut pressed_done = false;
 
     while samples.len() < target && steps < STEP_CAP {
+        if press_at >= 0.0 {
+            let sec = samples.len() as f32 / SAMPLE_RATE as f32;
+            let down = sec >= press_at && sec < press_at + 0.4;
+            if down {
+                bus.set_port1_buttons(emulator_core::ButtonState::from_bits(0x4000));
+            } else if !pressed_done && sec >= press_at + 0.4 {
+                bus.set_port1_buttons(emulator_core::ButtonState::from_bits(0));
+                pressed_done = true;
+            }
+        }
         let before = bus.cycles();
         if let Err(e) = cpu.step(&mut bus) {
             eprintln!("[capture] CPU stopped at step {steps}: {e:?}");

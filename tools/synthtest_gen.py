@@ -48,6 +48,12 @@ def arp_test():     # effect 6: group [24,28,31,36] arpeggiated fast
 def drop_test():    # effect 3: pitch drops to nothing (percussive)
     return [(36,0,6,3),None,(36,0,6,3),None]*4
 
+def instruments_test():  # 4 sustained notes of each instrument 0..7 (pitch24 vol5)
+    out=[]
+    for inst in range(8):
+        out += [(24,inst,5,0)]*4
+    return out  # 32 notes
+
 # SFX table: (speed, loop_start, loop_end, notes[32])
 def mksfx(speed, notes):
     notes = (notes + [None]*32)[:32]
@@ -62,6 +68,7 @@ SFX = [
     mksfx(16, vibrato_test()),# 5: vibrato (effect 2)
     mksfx(16, arp_test()),   # 6: arpeggio fast (effect 6)
     mksfx(16, drop_test()),  # 7: drop (effect 3)
+    mksfx(16, instruments_test()), # 8: each instrument sustained
 ]
 # music patterns: (flags, [sfx_or_None x4])  -- one pattern per song here
 SONGS = [
@@ -72,8 +79,9 @@ SONGS = [
     (0, [5, None, None, None]),   # song4: vibrato
     (0, [6, None, None, None]),   # song5: arpeggio
     (0, [7, None, None, None]),   # song6: drop
+    (0, [8, None, None, None]),   # song7: each instrument sustained
 ]
-SONG_NAMES = ["scale", "drums", "trio", "slide", "vibrato", "arp", "drop"]
+SONG_NAMES = ["scale", "drums", "trio", "slide", "vibrato", "arp", "drop", "instruments"]
 
 # ---- encode helpers ----------------------------------------------------------
 def note_word(n):

@@ -57,6 +57,11 @@ pub fn run() {
     sfx::init(AUDIO);
     game::init();
 
+    // Drive audio off real VBlanks so the music keeps tempo when rendering can't
+    // hold 60fps (see celeste1).
+    psx_rt::interrupts::install_vblank_counter();
+    let mut last_vb = psx_rt::interrupts::vblank_count();
+
     loop {
         let b = poll_port1().buttons;
         if b.is_held(button::SELECT) && b.is_held(button::START) {
@@ -86,13 +91,25 @@ pub fn run() {
         game::set_input(mask);
 
         game::update();
-        sfx::update(); // advance the music/SFX sequencer one frame (PICO-8 _update)
 
         fb.clear(0, 0, 16); // PICO-8 dark-blue backdrop
         game::draw();
         gpu::draw_sync();
         gpu::vsync();
         fb.swap();
+
+        // Advance the music/SFX by the VBlanks actually elapsed (real-time tempo).
+        let vb = psx_rt::interrupts::vblank_count();
+        let mut elapsed = vb.wrapping_sub(last_vb);
+        last_vb = vb;
+        if elapsed == 0 {
+            elapsed = 1;
+        } else if elapsed > 4 {
+            elapsed = 4;
+        }
+        for _ in 0..elapsed {
+            sfx::update();
+        }
     }
 }
 

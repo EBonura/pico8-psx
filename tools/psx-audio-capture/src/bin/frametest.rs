@@ -68,12 +68,20 @@ fn main() {
     bus.cdrom.insert_disc(Some(disc));
     bus.attach_digital_pad_port1();
 
+    // --fps: count actual framebuffer swaps (display-area Y flips between the two
+    // stacked buffers) over the run to measure the game's real render rate.
+    let fps_mode = arg("--fps").is_some();
+    let mut last_y = bus.gpu.display_area().y;
+    let mut swaps = 0u64;
+    let mut fps_window_frames = 0u64;
+    let press_started_at = if press_at >= 0 { press_at as u32 } else { 0 };
+
     let mut steps = 0u64;
     for frame in 0..frames {
         // Decide this frame's held buttons.
         let mut mask = hold;
-        if press_at >= 0 && frame as i64 >= press_at {
-            mask |= press_mask;
+        if press_at >= 0 && frame as i64 >= press_at && frame as i64 <= press_at + 24 {
+            mask |= press_mask; // hold the start press ~0.4s then release
         }
         bus.set_port1_buttons(ButtonState::from_bits(mask));
 
@@ -87,6 +95,22 @@ fn main() {
             steps += 1;
             accum = accum.saturating_add(bus.cycles().saturating_sub(before));
         }
+        // After this emulated 1/60s slice, did the displayed buffer flip?
+        let y = bus.gpu.display_area().y;
+        if frame as u32 > press_started_at + 60 {
+            if y != last_y {
+                swaps += 1;
+            }
+            fps_window_frames += 1;
+        }
+        last_y = y;
+    }
+    if fps_mode {
+        let secs = fps_window_frames as f64 / 60.0;
+        eprintln!(
+            "[frametest] real render rate: {swaps} swaps over {secs:.2}s = {:.1} fps (target 60)",
+            swaps as f64 / secs
+        );
     }
 
     let (rgba, w, h) = bus.gpu.display_rgba8();

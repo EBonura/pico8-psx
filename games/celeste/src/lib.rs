@@ -88,6 +88,11 @@ pub fn run() {
     // btnp on the title screen waits for a fresh press instead of auto-starting.
     pico8::input::prime(pad_mask());
 
+    // Drive the audio sequencer off real VBlanks, not render frames, so the
+    // music keeps PICO-8's hardware tempo even when rendering can't hold 60fps.
+    psx_rt::interrupts::install_vblank_counter();
+    let mut last_vb = psx_rt::interrupts::vblank_count();
+
     loop {
         // Quit to the launcher: Select+Start held together.
         let b = poll_port1().buttons;
@@ -97,20 +102,32 @@ pub fn run() {
         game::set_input(pad_mask());
 
         game::update();
-        sfx::update();
 
         // Freeze frames (dash/orb): hold the last drawn frame on screen by not
         // redrawing or swapping -- exactly the PICO-8 freeze effect.
         if game::freeze() > 0 {
             gpu::vsync();
-            continue;
+        } else {
+            fb.clear(0, 0, 0);
+            game::draw();
+            gpu::draw_sync();
+            gpu::vsync();
+            fb.swap();
         }
 
-        fb.clear(0, 0, 0);
-        game::draw();
-        gpu::draw_sync();
-        gpu::vsync();
-        fb.swap();
+        // Advance the music/SFX by however many VBlanks actually elapsed (one at
+        // 60fps; two if a frame was dropped) -- keeps audio real-time.
+        let vb = psx_rt::interrupts::vblank_count();
+        let mut elapsed = vb.wrapping_sub(last_vb);
+        last_vb = vb;
+        if elapsed == 0 {
+            elapsed = 1;
+        } else if elapsed > 4 {
+            elapsed = 4; // cap catch-up after a long hitch
+        }
+        for _ in 0..elapsed {
+            sfx::update();
+        }
     }
 }
 
@@ -178,6 +195,18 @@ const SYNTH_AUDIO: AudioData = AudioData {
 /// Play each synthtest song for SONG_FRAMES then GAP_FRAMES of silence, in order,
 /// looping -- the same sequence + timing the PICO-8 synthtest cart records, so the
 /// host capture splits on the gaps and each song is compared note-for-note.
+/// Play a single synthtest song (pattern) once and keep the sequencer running,
+/// for an isolated, easy-to-align capture of e.g. the instruments song.
+pub fn run_synth_song(idx: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(SYNTH_AUDIO);
+    sfx::music(idx, 0, 0);
+    loop {
+        sfx::update();
+        gpu::vsync();
+    }
+}
+
 pub fn run_synth_test() {
     use assets::synthtest_data::{GAP_FRAMES, NUM_SONGS, SONG_FRAMES};
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
