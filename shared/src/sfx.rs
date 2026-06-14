@@ -121,6 +121,11 @@ static mut AUDIO: AudioData = EMPTY_AUDIO;
 static mut CHANNELS: [Channel; 8] = [CH0; 8];
 static mut MUSIC_PATTERN: i32 = -1;
 static mut MUSIC_LOOP: i32 = -1;
+// Pattern length is set by the leftmost length-defining channel (PICO-8 rule),
+// NOT by "any channel finished" -- looping channels never finish, so the old
+// logic got stuck forever on patterns whose channels all loop.
+static mut MUSIC_TICK: i32 = 0; // ticks elapsed in the current pattern
+static mut MUSIC_LEN: i32 = 0; // total ticks for the current pattern
 static mut SFX_NEXT_VOICE: usize = 0;
 static mut WAVEFORM_ADDR: [u32; 8] = [0; 8]; // byte addresses in SPU RAM
 
@@ -304,6 +309,35 @@ unsafe fn advance_channel(v: usize) {
     apply_effects(v);
 }
 
+/// Total ticks the current pattern lasts. PICO-8 rule: the leftmost active
+/// channel whose SFX is *length-defining* sets it -- that's a non-looping sfx
+/// (loop_end 0) or one whose loop spans the full 32 rows (loop_end >= 32).
+/// Genuine sub-loops (0 < loop_end < 32) repeat to fill the pattern and are
+/// skipped. Length = rows (32, or the LEN marker loop_start) * speed.
+unsafe fn music_pattern_len() -> i32 {
+    let pat = AUDIO.music_patterns[MUSIC_PATTERN as usize];
+    let mut fallback = 0;
+    for c in 0..4 {
+        let chan = pat[1 + c];
+        if chan & 0x80 != 0 {
+            continue; // disabled channel
+        }
+        let meta = AUDIO.sfx_meta[(chan & 0x3F) as usize];
+        let speed = (meta[0] as i32).max(1);
+        let loop_start = meta[1] as i32;
+        let loop_end = meta[2] as i32;
+        if fallback == 0 {
+            fallback = 32 * speed * TICK_PER_SPEED;
+        }
+        if loop_end > 0 && loop_end < 32 {
+            continue; // a sub-loop never defines length
+        }
+        let rows = if loop_end == 0 && loop_start > 0 { loop_start } else { 32 };
+        return rows * speed * TICK_PER_SPEED;
+    }
+    if fallback > 0 { fallback } else { 32 * TICK_PER_SPEED }
+}
+
 unsafe fn music_advance_pattern() {
     if MUSIC_PATTERN < 0 || MUSIC_PATTERN >= AUDIO.music_pattern_count {
         MUSIC_PATTERN = -1;
@@ -330,19 +364,8 @@ unsafe fn music_advance_pattern() {
         CHANNELS[c].no_loop = false;
         start_channel_note(c);
     }
-}
-
-unsafe fn music_any_channel_done() -> bool {
-    let pat = AUDIO.music_patterns[MUSIC_PATTERN as usize];
-    for c in 0..4 {
-        if pat[1 + c] & 0x80 != 0 {
-            continue;
-        }
-        if CHANNELS[c].sfx_id < 0 {
-            return true;
-        }
-    }
-    false
+    MUSIC_TICK = 0;
+    MUSIC_LEN = music_pattern_len();
 }
 
 // ---- public API ----
@@ -379,7 +402,8 @@ pub fn update() {
             for c in 0..4 {
                 advance_channel(c);
             }
-            if music_any_channel_done() {
+            MUSIC_TICK += TICK_INC;
+            if MUSIC_TICK >= MUSIC_LEN {
                 let flags = AUDIO.music_patterns[MUSIC_PATTERN as usize][0];
                 if flags & MUSIC_STOP != 0 {
                     MUSIC_PATTERN = -1;
