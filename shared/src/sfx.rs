@@ -220,15 +220,16 @@ unsafe fn apply_effects(v: usize) {
     let voice = Voice::new(v as u8);
     match effect {
         1 => {
-            // slide
-            let next_pos = ch.note_pos + 1;
-            if next_pos < 32 {
-                let nn = AUDIO.sfx_notes[ch.sfx_id as usize][next_pos as usize];
-                let target = get_pitch(sfx_pitch(nn), sfx_instr(nn)) as i32;
-                let mut p = base_pitch + ((target - base_pitch) * t) / total;
-                p = p.clamp(1, 0x3FFF);
-                voice.set_pitch(Pitch::raw(p as u16));
-            }
+            // slide (portamento): glide from the PREVIOUS note's pitch up/down to
+            // this note's pitch over the row. The effect sits on the destination.
+            let from = if ch.note_pos > 0 {
+                let pn = AUDIO.sfx_notes[ch.sfx_id as usize][(ch.note_pos - 1) as usize];
+                get_pitch(sfx_pitch(pn), instr) as i32
+            } else {
+                base_pitch
+            };
+            let p = (from + ((base_pitch - from) * t) / total).clamp(1, 0x3FFF);
+            voice.set_pitch(Pitch::raw(p as u16));
         }
         2 => {
             // vibrato
@@ -263,17 +264,16 @@ unsafe fn apply_effects(v: usize) {
             let vv = (VOL_TABLE[vol as usize] as u32 * (total - t) as u32 / total as u32) as i16;
             voice.set_volume(Volume(vv), Volume(vv));
         }
-        6 => {
-            // arp fast
-            let step = (t / 4) % 3;
-            let off = if step == 0 { 0 } else if step == 1 { 4 } else { 7 };
-            voice.set_pitch(Pitch::raw(get_pitch((pitch_key + off) & 63, instr)));
-        }
-        7 => {
-            // arp slow
-            let step = (t / 8) % 3;
-            let off = if step == 0 { 0 } else if step == 1 { 4 } else { 7 };
-            voice.set_pitch(Pitch::raw(get_pitch((pitch_key + off) & 63, instr)));
+        6 | 7 => {
+            // arpeggio: cycle the 4 notes of the current group (pos & ~3 .. +3),
+            // holding each 4 (fast) or 8 (slow) PICO-8 ticks -- halved if speed<=8.
+            let hold_base = if effect == 6 { 4 } else { 8 };
+            let hold = if speed <= 8 { (hold_base / 2).max(1) } else { hold_base };
+            let gtick = ch.note_pos * speed + t / TICK_PER_SPEED; // ticks since sfx start
+            let idx = (gtick / hold) % 4;
+            let g = ((ch.note_pos & !3) + idx).clamp(0, 31);
+            let an = AUDIO.sfx_notes[ch.sfx_id as usize][g as usize];
+            voice.set_pitch(Pitch::raw(get_pitch(sfx_pitch(an), instr)));
         }
         _ => {}
     }

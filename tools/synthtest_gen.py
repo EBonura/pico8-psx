@@ -34,6 +34,20 @@ def melody():  # triangle lead
     s=[24,24,28,31, 28,26,24,26, 29,29,33,36, 33,31,29,31]
     return [(p,0,5,0) for p in s]*2
 
+def slide_test():   # effect 1: each note slides from the previous note's pitch
+    s=[24,36,29,41, 24,36,29,41]
+    return [(p,0,5,1) for p in s]*2
+
+def vibrato_test(): # effect 2: sustained note with vibrato
+    return [(24,0,5,2) for _ in range(16)]
+
+def arp_test():     # effect 6: group [24,28,31,36] arpeggiated fast
+    g=[24,28,31,36]
+    return [(p,0,5,6) for p in g]*8
+
+def drop_test():    # effect 3: pitch drops to nothing (percussive)
+    return [(36,0,6,3),None,(36,0,6,3),None]*4
+
 # SFX table: (speed, loop_start, loop_end, notes[32])
 def mksfx(speed, notes):
     notes = (notes + [None]*32)[:32]
@@ -44,14 +58,22 @@ SFX = [
     mksfx(12, drums()),      # 1: noise percussion
     mksfx(14, bass()),       # 2: triangle bass
     mksfx(16, melody()),     # 3: triangle melody (for trio)
+    mksfx(16, slide_test()), # 4: slide (effect 1)
+    mksfx(16, vibrato_test()),# 5: vibrato (effect 2)
+    mksfx(16, arp_test()),   # 6: arpeggio fast (effect 6)
+    mksfx(16, drop_test()),  # 7: drop (effect 3)
 ]
 # music patterns: (flags, [sfx_or_None x4])  -- one pattern per song here
 SONGS = [
     (0, [0, None, None, None]),   # song0: scale only
     (0, [1, None, None, None]),   # song1: drums only
     (0, [3, 2, 1, None]),         # song2: melody + bass + drums
+    (0, [4, None, None, None]),   # song3: slide
+    (0, [5, None, None, None]),   # song4: vibrato
+    (0, [6, None, None, None]),   # song5: arpeggio
+    (0, [7, None, None, None]),   # song6: drop
 ]
-SONG_NAMES = ["scale", "drums", "trio"]
+SONG_NAMES = ["scale", "drums", "trio", "slide", "vibrato", "arp", "drop"]
 
 # ---- encode helpers ----------------------------------------------------------
 def note_word(n):
@@ -80,7 +102,7 @@ def p8_music_line(song):
 
 lua = f"""t=0
 done=false
-songs={{0,1,2}}
+songs={{{','.join(str(i) for i in range(len(SONGS)))}}}
 sf={SONG_FRAMES}
 gf={GAP_FRAMES}
 function _update60()
