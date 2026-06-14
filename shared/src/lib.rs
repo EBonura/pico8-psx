@@ -22,6 +22,7 @@
 pub mod backend;
 pub mod fixed;
 pub mod font;
+pub mod input;
 pub mod palette;
 pub mod rng;
 pub mod sfx;

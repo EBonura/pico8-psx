@@ -45,6 +45,32 @@ const AUDIO: AudioData = AudioData {
     music_pattern_count: 42,
 };
 
+/// Poll the pad and map it to PICO-8's 6 buttons: arrows, Cross=jump (O),
+/// Circle=dash (X).
+fn pad_mask() -> u8 {
+    let b = poll_port1().buttons;
+    let mut mask = 0u8;
+    if b.is_held(button::LEFT) {
+        mask |= 1 << 0;
+    }
+    if b.is_held(button::RIGHT) {
+        mask |= 1 << 1;
+    }
+    if b.is_held(button::UP) {
+        mask |= 1 << 2;
+    }
+    if b.is_held(button::DOWN) {
+        mask |= 1 << 3;
+    }
+    if b.is_held(button::CROSS) {
+        mask |= 1 << 4;
+    }
+    if b.is_held(button::CIRCLE) {
+        mask |= 1 << 5;
+    }
+    mask
+}
+
 /// Boot Celeste and run its 60fps frame loop until Select+Start is held.
 pub fn run() {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
@@ -58,35 +84,17 @@ pub fn run() {
     pico8::rng::srand(42);
     game::init();
 
-    loop {
-        // Map the pad to PICO-8's 6 buttons: arrows, Cross=jump, Circle=dash.
-        let b = poll_port1().buttons;
+    // The launcher launched us with Cross still held; prime the input model so
+    // btnp on the title screen waits for a fresh press instead of auto-starting.
+    pico8::input::prime(pad_mask());
 
+    loop {
         // Quit to the launcher: Select+Start held together.
+        let b = poll_port1().buttons;
         if b.is_held(button::SELECT) && b.is_held(button::START) {
             return;
         }
-
-        let mut mask = 0u8;
-        if b.is_held(button::LEFT) {
-            mask |= 1 << 0;
-        }
-        if b.is_held(button::RIGHT) {
-            mask |= 1 << 1;
-        }
-        if b.is_held(button::UP) {
-            mask |= 1 << 2;
-        }
-        if b.is_held(button::DOWN) {
-            mask |= 1 << 3;
-        }
-        if b.is_held(button::CROSS) {
-            mask |= 1 << 4;
-        }
-        if b.is_held(button::CIRCLE) {
-            mask |= 1 << 5;
-        }
-        game::set_input(mask);
+        game::set_input(pad_mask());
 
         game::update();
         sfx::update();

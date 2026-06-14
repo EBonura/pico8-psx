@@ -13,6 +13,10 @@ edition = "2021"
 name = "psx-audio-capture"
 path = "src/main.rs"
 
+[[bin]]
+name = "frametest"
+path = "src/bin/frametest.rs"
+
 [dependencies]
 emulator-core    = { path = "../../third_party/PSoXide/emu/crates/emulator-core" }
 psx-iso          = { path = "../../third_party/PSoXide/crates/psx-iso" }
