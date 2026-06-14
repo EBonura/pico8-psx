@@ -1,0 +1,14 @@
+# Build this crate for the PlayStation 1 by default, so a plain
+# `cargo build --release` inside this directory produces a PSX-EXE.
+#
+# This config lives under the game crate (not the repo root) on
+# purpose: it must NOT leak onto the host tools (mkisopsx) that the
+# Makefile builds from inside the PSoXide submodule.
+[build]
+target = "mipsel-sony-psx"
+
+[unstable]
+# No prebuilt std for the PSX target: compile core ourselves, with the
+# memcpy/memset shims compiler-builtins needs on bare metal.
+build-std = ["core"]
+build-std-features = ["compiler-builtins-mem"]

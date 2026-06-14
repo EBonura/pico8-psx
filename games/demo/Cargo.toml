@@ -1,0 +1,36 @@
+[package]
+name    = "demo"
+version = "0.1.0"
+edition = "2021"
+
+# Stand-alone workspace root, like the individual game crates. The demo
+# is the headline artifact: one boot EXE that shows a cover menu and
+# launches either game (both linked in as libraries).
+[workspace]
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
+
+[profile.release]
+# no_std has no unwinder; abort keeps the binary small.
+panic         = "abort"
+codegen-units = 1
+# IMPORTANT: thin, not fat. Fat `lto = true` wrongly garbage-collects the
+# cross-crate `celeste::run` / `celeste2::run` call chains when both games
+# are linked in as libraries, producing a ~23 KiB EXE with the games gone.
+# Thin LTO keeps the call graph intact (and still optimizes the games).
+lto           = "thin"
+
+[dependencies]
+# The two games, linked in as libraries; the launcher calls their
+# `run()` entry points and they return on Select+Start.
+celeste  = { path = "../celeste" }
+celeste2 = { path = "../celeste2" }
+
+# PSoXide SDK, pulled from the pinned submodule via path deps.
+psx-rt   = { path = "../../third_party/PSoXide/sdk/crates/psx-rt" }
+psx-gpu  = { path = "../../third_party/PSoXide/sdk/crates/psx-gpu" }
+psx-vram = { path = "../../third_party/PSoXide/sdk/crates/psx-vram" }
+psx-pad  = { path = "../../third_party/PSoXide/sdk/crates/psx-pad" }
+psx-font = { path = "../../third_party/PSoXide/sdk/crates/psx-font" }

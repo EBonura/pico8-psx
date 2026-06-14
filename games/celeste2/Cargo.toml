@@ -1,0 +1,30 @@
+[package]
+name    = "celeste2"
+version = "0.1.0"
+edition = "2021"
+
+# Stand-alone workspace root. Each game is built independently of the
+# PSoXide submodule's own (host / sdk / engine) workspaces -- exactly
+# how PSoXide's in-tree examples are structured.
+[workspace]
+
+[[bin]]
+name = "celeste2"
+path = "src/main.rs"
+
+[profile.release]
+# no_std has no unwinder; abort keeps the binary small.
+panic         = "abort"
+codegen-units = 1
+lto           = true
+
+# PSoXide SDK + engine, pulled from the pinned submodule via path deps.
+# The submodule preserves PSoXide's full tree, so each crate's own
+# internal path deps resolve unchanged.
+[dependencies]
+psx-rt   = { path = "../../third_party/PSoXide/sdk/crates/psx-rt" }
+psx-gpu  = { path = "../../third_party/PSoXide/sdk/crates/psx-gpu" }
+psx-vram = { path = "../../third_party/PSoXide/sdk/crates/psx-vram" }
+psx-io   = { path = "../../third_party/PSoXide/sdk/crates/psx-io" }
+psx-hw   = { path = "../../third_party/PSoXide/crates/psx-hw" }
+psx-pad  = { path = "../../third_party/PSoXide/sdk/crates/psx-pad" }

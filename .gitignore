@@ -1,0 +1,20 @@
+# Rust build output (each game is its own workspace)
+target/
+**/target/
+
+# Disc / EXE build artifacts
+/build/
+*.exe
+*.bin
+*.cue
+*.toc
+
+# AI agent / editor scratch (kept local, never committed)
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
+.cursor/
+
+# macOS
+.DS_Store
