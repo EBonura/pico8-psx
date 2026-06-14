@@ -96,10 +96,12 @@ unsafe fn set_voice_noise(v: usize, on: bool) {
 }
 
 /// SPUCNT noise-rate field (bits 8..13) for a PICO-8 noise note `pitch` (0..63).
-/// Higher rate value = higher NoiseShift = LOWER frequency, so map a higher
-/// PICO-8 pitch (brighter) to a lower shift. step (bits 0..1) kept at 2.
+/// On the SPU a higher NoiseShift = HIGHER (brighter) noise frequency, and
+/// PICO-8's noise gets brighter with pitch, so map pitch up to shift up.
+/// Calibrated so the SPU noise centroid tracks PICO-8's (~2.3kHz at pitch 4 to
+/// ~4.7kHz at pitch 60). step (bits 0..1) kept at 2.
 fn noise_clock(pitch: i32) -> u16 {
-    let shift = (14 - pitch / 4).clamp(1, 15) as u16;
+    let shift = (1 + pitch / 7).clamp(1, 12) as u16;
     (shift << 2) | 0x02
 }
 
@@ -180,11 +182,14 @@ unsafe fn start_channel_note(v: usize) {
         return;
     }
     let instr = sfx_instr(note);
-    // Hardware noise reads ~1.4x hotter than a sample voice at the same level
-    // (calibrated against PICO-8's percussion via the synthtest drums song), so
-    // scale it to 0.70 to match.
+    // Hardware noise: a 0.70 base (it reads ~1.4x hotter than a sample voice),
+    // times a pitch-loudness factor -- PICO-8's noise gets ~2.6x louder from low
+    // to high pitch (measured), so a flat level made the drums all the same.
     let spu_vol = if instr == 6 {
-        ((VOL_TABLE[vol as usize] as i32 * 45) / 64) as i16
+        let base = VOL_TABLE[vol as usize] as i32 * 45 / 64;
+        let p = sfx_pitch(note);
+        let pfac = 54 + (p * p) / 37; // /64: ~0.85 (low) .. ~2.4 (pitch 60)
+        ((base * pfac) / 64) as i16
     } else {
         VOL_TABLE[vol as usize] as i16
     };
