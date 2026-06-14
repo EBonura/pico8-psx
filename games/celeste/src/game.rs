@@ -330,6 +330,10 @@ static mut DEATHS: i32 = 0;
 static mut MAX_DJUMP: i32 = 1;
 static mut START_GAME: bool = false;
 static mut START_GAME_FLASH: i32 = 0;
+// The launcher selects a game with the same button (Cross/jump), so it's still
+// held when the title appears. Require a fresh press: only arm the start input
+// once jump AND dash have both been released at least once on the title.
+static mut TITLE_ARMED: bool = false;
 
 static mut CLOUDS: [Cloud; 17] = [CLOUD0; 17];
 static mut PARTICLES: [Particle; 25] = [PARTICLE0; 25];
@@ -1560,6 +1564,7 @@ unsafe fn title_screen() {
     MAX_DJUMP = 1;
     START_GAME = false;
     START_GAME_FLASH = 0;
+    TITLE_ARMED = false;
     sfx::music(40, 0, 7);
     load_room(7, 3);
 }
@@ -1690,7 +1695,12 @@ pub fn update() {
         }
 
         if is_title() {
-            if !START_GAME && (p8btn(K_JUMP) || p8btn(K_DASH)) {
+            // Don't accept the held button left over from the launcher: wait for
+            // a clean release, then a fresh press.
+            if !TITLE_ARMED && !p8btn(K_JUMP) && !p8btn(K_DASH) {
+                TITLE_ARMED = true;
+            }
+            if !START_GAME && TITLE_ARMED && (p8btn(K_JUMP) || p8btn(K_DASH)) {
                 sfx::music(-1, 0, 0);
                 START_GAME_FLASH = 100;
                 START_GAME = true;
