@@ -178,10 +178,13 @@ pub fn run_sfx_soundtest(frames: &[u16]) {
 pub fn run_music_test(pattern: i32) {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
     sfx::init(AUDIO);
+    // Advance one sequencer step per REAL vblank (60Hz) like the game -- gpu::vsync()
+    // busy-waits 242 hblanks (~65fps), which played the music ~8% fast vs PICO-8.
+    psx_rt::interrupts::install_vblank_counter();
     sfx::music(pattern, 0, 0);
     loop {
         sfx::update();
-        gpu::vsync();
+        wait_vblank();
     }
 }
 
