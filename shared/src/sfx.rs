@@ -273,82 +273,77 @@ unsafe fn advance_custom(v: usize) {
     if stepped {
         custom_set_voice(v, false);
     }
-    // The outer note's pitch effect (arpeggio/slide/drop) modulates the custom
-    // base pitch every frame, between custom steps -- else a custom instrument
-    // played with an arpeggio (celeste2 sfx59) ignores it. custom_apply_effect
-    // then bends the inner-note vibrato around this base.
-    let onote = AUDIO.sfx_notes[CHANNELS[v].sfx_id as usize][CHANNELS[v].note_pos as usize];
-    if matches!(sfx_effect(onote), 1 | 3 | 6 | 7) {
-        custom_set_pitch(v);
-    }
-    custom_apply_effect(v);
+    custom_modulate(v);
 }
 
-/// Re-pitch a custom-instrument voice from the current outer (effect-modulated)
-/// key plus the custom step's relative pitch, WITHOUT re-triggering the sample
-/// (no click). Used to track an arpeggio/slide/drop on the outer note frame-by-frame.
-unsafe fn custom_set_pitch(v: usize) {
+/// Per-frame modulation of a custom-instrument voice, combining the INNER custom
+/// note's own effect (the macro's vibrato/fades -- e.g. celeste2's pad sustains
+/// wobble) with the OUTER note's effect (arpeggio/slide/drop already folded into
+/// the played key via custom_outer_key; plus outer vibrato and fades). PICO-8
+/// applies the note's effect to a custom-instrument note on top of the
+/// instrument's own envelope. When neither layer has a vibrato/fade and the outer
+/// note has no pitch effect, this sets nothing -- so the 600+ plain custom notes
+/// in the music are byte-for-byte unchanged (custom_set_voice already programmed
+/// them on the step).
+unsafe fn custom_modulate(v: usize) {
     let ch = CHANNELS[v];
     let k = ch.custom_k as usize;
     let cnote = AUDIO.sfx_notes[k][(ch.custom_pos & 31) as usize];
-    if sfx_vol(cnote) == 0 {
-        return;
-    }
-    let cwave = sfx_instr(cnote);
-    let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
-    let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
-    if cwave == 6 {
-        set_noise_freq(played);
-    } else {
-        Voice::new(v as u8).set_pitch(Pitch::raw(get_pitch(played, cwave)));
-    }
-}
-
-/// Per-frame effect for the current custom-instrument step (its own notes carry
-/// vibrato/fades -- e.g. the sustain of celeste2's pad instruments wobbles).
-unsafe fn custom_apply_effect(v: usize) {
-    let ch = CHANNELS[v];
-    let k = ch.custom_k as usize;
-    let cnote = AUDIO.sfx_notes[k][(ch.custom_pos & 31) as usize];
-    let eff = sfx_effect(cnote);
     let cvol = sfx_vol(cnote);
-    if cvol == 0 || eff == 0 {
+    if cvol == 0 {
         return;
     }
+    let s = ch.sfx_id as usize;
+    let in_eff = sfx_effect(cnote);
+    let out_eff = sfx_effect(AUDIO.sfx_notes[s][ch.note_pos as usize]);
     let cwave = sfx_instr(cnote);
     let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
     let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
-    let base_pitch = get_pitch(played, cwave) as i32;
-    let base_vol = VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7;
-    let total = (AUDIO.sfx_meta[k][0] as i32 * TICK_PER_SPEED).max(1);
-    let t = ch.custom_tick;
     let voice = Voice::new(v as u8);
-    match eff {
-        2 => {
-            // vibrato
-            CHANNELS[v].vibrato_phase += 16;
-            let phase = CHANNELS[v].vibrato_phase & 0xFF;
-            let m = if phase < 64 {
-                phase
-            } else if phase < 192 {
-                128 - phase
-            } else {
-                phase - 256
-            };
+
+    // Pitch: arp/slide/drop are already in `played`; vibrato (inner or outer) is a
+    // Hz wobble on top. Only touch pitch when something actually modulates it.
+    if matches!(out_eff, 1 | 3 | 6 | 7) || in_eff == 2 || out_eff == 2 {
+        if cwave == 6 {
+            set_noise_freq(played);
+        } else {
+            let base_pitch = get_pitch(played, cwave) as i32;
+            let mut m = 0;
+            if in_eff == 2 || out_eff == 2 {
+                CHANNELS[v].vibrato_phase += 16;
+                let phase = CHANNELS[v].vibrato_phase & 0xFF;
+                m = if phase < 64 {
+                    phase
+                } else if phase < 192 {
+                    128 - phase
+                } else {
+                    phase - 256
+                };
+            }
             let p = (base_pitch + (m * base_pitch) / 2048).clamp(1, 0x3FFF);
             voice.set_pitch(Pitch::raw(p as u16));
         }
-        4 => {
-            // fade in over the custom row
-            let vv = (base_vol * t / total) as i16;
-            voice.set_volume(Volume(vv), Volume(vv));
+    }
+
+    // Volume: the inner macro's fade times the outer note's fade. Either layer
+    // alone (or both) scales the step volume; with no fade we leave it untouched.
+    if matches!(in_eff, 4 | 5) || matches!(out_eff, 4 | 5) {
+        let mut vol = VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7;
+        let it = ch.custom_tick;
+        let itot = (AUDIO.sfx_meta[k][0] as i32 * TICK_PER_SPEED).max(1);
+        match in_eff {
+            4 => vol = vol * it / itot,
+            5 => vol = vol * (itot - it) / itot,
+            _ => {}
         }
-        5 => {
-            // fade out over the custom row
-            let vv = (base_vol * (total - t) / total) as i16;
-            voice.set_volume(Volume(vv), Volume(vv));
+        let ot = ch.tick;
+        let otot = (AUDIO.sfx_meta[s][0] as i32 * TICK_PER_SPEED).max(1);
+        match out_eff {
+            4 => vol = vol * ot / otot,
+            5 => vol = vol * (otot - ot) / otot,
+            _ => {}
         }
-        _ => {}
+        voice.set_volume(Volume(vol as i16), Volume(vol as i16));
     }
 }
 
