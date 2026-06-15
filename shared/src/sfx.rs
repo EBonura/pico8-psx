@@ -219,7 +219,7 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
     }
     let cwave = sfx_instr(cnote);
     let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
-    let played = (ch.note_pitch + sfx_pitch(cnote) - base).clamp(0, 63);
+    let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
     let spu_vol = (VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7) as i16;
     let spu_pitch = get_pitch(played, cwave);
     let voice = Voice::new(v as u8);
@@ -273,7 +273,35 @@ unsafe fn advance_custom(v: usize) {
     if stepped {
         custom_set_voice(v, false);
     }
+    // The outer note's pitch effect (arpeggio/slide/drop) modulates the custom
+    // base pitch every frame, between custom steps -- else a custom instrument
+    // played with an arpeggio (celeste2 sfx59) ignores it. custom_apply_effect
+    // then bends the inner-note vibrato around this base.
+    let onote = AUDIO.sfx_notes[CHANNELS[v].sfx_id as usize][CHANNELS[v].note_pos as usize];
+    if matches!(sfx_effect(onote), 1 | 3 | 6 | 7) {
+        custom_set_pitch(v);
+    }
     custom_apply_effect(v);
+}
+
+/// Re-pitch a custom-instrument voice from the current outer (effect-modulated)
+/// key plus the custom step's relative pitch, WITHOUT re-triggering the sample
+/// (no click). Used to track an arpeggio/slide/drop on the outer note frame-by-frame.
+unsafe fn custom_set_pitch(v: usize) {
+    let ch = CHANNELS[v];
+    let k = ch.custom_k as usize;
+    let cnote = AUDIO.sfx_notes[k][(ch.custom_pos & 31) as usize];
+    if sfx_vol(cnote) == 0 {
+        return;
+    }
+    let cwave = sfx_instr(cnote);
+    let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
+    let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
+    if cwave == 6 {
+        set_noise_freq(played);
+    } else {
+        Voice::new(v as u8).set_pitch(Pitch::raw(get_pitch(played, cwave)));
+    }
 }
 
 /// Per-frame effect for the current custom-instrument step (its own notes carry
@@ -289,7 +317,7 @@ unsafe fn custom_apply_effect(v: usize) {
     }
     let cwave = sfx_instr(cnote);
     let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
-    let played = (ch.note_pitch + sfx_pitch(cnote) - base).clamp(0, 63);
+    let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
     let base_pitch = get_pitch(played, cwave) as i32;
     let base_vol = VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7;
     let total = (AUDIO.sfx_meta[k][0] as i32 * TICK_PER_SPEED).max(1);
@@ -321,6 +349,48 @@ unsafe fn custom_apply_effect(v: usize) {
             voice.set_volume(Volume(vv), Volume(vv));
         }
         _ => {}
+    }
+}
+
+/// Which note of the current arpeggio group (0..31) plays right now. PICO-8
+/// arpeggio runs at a FIXED real-time rate (not row-relative): per zepto8 the
+/// step index is `m * 7.5 * seconds`, m = (speed<=8?32:16)/(fast?4:8). Our clock
+/// is `speed*TICK_PER_SPEED` internal ticks per note and 60 updates/s
+/// (TICK_INC=256), i.e. 15360 ticks/s, and 15360/7.5 = 2048 -- so n = m*ticks/2048.
+unsafe fn arp_note_index(v: usize, effect: i32) -> i32 {
+    let ch = CHANNELS[v];
+    let speed = (AUDIO.sfx_meta[ch.sfx_id as usize][0] as i32).max(1);
+    let m = (if speed <= 8 { 32 } else { 16 }) / (if effect == 6 { 4 } else { 8 });
+    let g = ch.note_pos * speed * TICK_PER_SPEED + ch.tick; // internal ticks since sfx start
+    let n = (m * g) / 2048;
+    ((ch.note_pos & !3) + (n & 3)).clamp(0, 31)
+}
+
+/// The current note's effective pitch KEY (0..63) after its own pitch-changing
+/// effect (arpeggio / slide / drop). Used as the base key that feeds a custom
+/// instrument, so a note combining a custom instrument with an arpeggio (celeste2
+/// sfx59) still arpeggiates -- PICO-8 applies the note effect to the pitch driving
+/// the custom waveform. With no pitch effect this is just the note's own key, so
+/// plain custom notes are unchanged.
+unsafe fn custom_outer_key(v: usize) -> i32 {
+    let ch = CHANNELS[v];
+    let s = ch.sfx_id as usize;
+    let note = AUDIO.sfx_notes[s][ch.note_pos as usize];
+    let key = sfx_pitch(note);
+    let speed = (AUDIO.sfx_meta[s][0] as i32).max(1);
+    let total = (speed * TICK_PER_SPEED).max(1);
+    match sfx_effect(note) {
+        6 | 7 => sfx_pitch(AUDIO.sfx_notes[s][arp_note_index(v, sfx_effect(note)) as usize]),
+        1 => {
+            let from = if ch.note_pos > 0 {
+                sfx_pitch(AUDIO.sfx_notes[s][(ch.note_pos - 1) as usize])
+            } else {
+                key
+            };
+            from + ((key - from) * ch.tick) / total
+        }
+        3 => (key * (total - ch.tick) / total).max(0),
+        _ => key,
     }
 }
 
@@ -458,13 +528,9 @@ unsafe fn apply_effects(v: usize) {
             set_vol = Some(VOL_TABLE[vol as usize] as i32 * (total - t) / total);
         }
         6 | 7 => {
-            // arpeggio: cycle the 4 notes of the current group (pos & ~3 .. +3),
-            // holding each 4 (fast) or 8 (slow) PICO-8 ticks -- halved if speed<=8.
-            let hold_base = if effect == 6 { 4 } else { 8 };
-            let hold = if speed <= 8 { (hold_base / 2).max(1) } else { hold_base };
-            let gtick = ch.note_pos * speed + t / TICK_PER_SPEED;
-            let idx = (gtick / hold) % 4;
-            let g = ((ch.note_pos & !3) + idx).clamp(0, 31);
+            // arpeggio: cycle the 4 notes of the current group at PICO-8's fixed
+            // real-time rate (see arp_note_index), keeping this note's instrument.
+            let g = arp_note_index(v, effect);
             let an = AUDIO.sfx_notes[ch.sfx_id as usize][g as usize];
             set_pitch = Some(get_pitch(sfx_pitch(an), instr) as i32);
         }
