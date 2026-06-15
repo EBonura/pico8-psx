@@ -94,13 +94,17 @@ unsafe fn set_voice_noise(v: usize, on: bool) {
 }
 
 /// SPUCNT noise-rate field (bits 8..13) for a PICO-8 noise note `pitch` (0..63).
-/// On the SPU a higher NoiseShift = HIGHER (brighter) noise frequency, and
-/// PICO-8's noise gets brighter with pitch, so map pitch up to shift up.
-/// Calibrated so the SPU noise centroid tracks PICO-8's (~2.3kHz at pitch 4 to
-/// ~4.7kHz at pitch 60). step (bits 0..1) kept at 2.
+/// On the SPU a higher NoiseShift = HIGHER (brighter) noise frequency, and PICO-8's
+/// noise gets brighter with pitch, so map pitch up to shift up. The SPU's LFSR
+/// noise is NARROWBAND (energy peaked near its centroid) while PICO-8's is
+/// BROADBAND, so we can't match both centroid AND the high-frequency hiss: matching
+/// the centroid (old shift = 1 + pitch/7) left the percussion ~5x short on
+/// 3-9kHz energy, reading as a dull thud with no snap. We bias brighter
+/// (shift = 1 + pitch/4, step 3) to restore the high-band hiss that makes a noise
+/// hit read as a drum, at the cost of a centroid ~1.5-2x high. step (bits 0..1) = 3.
 fn noise_clock(pitch: i32) -> u16 {
-    let shift = (1 + pitch / 7).clamp(1, 12) as u16;
-    (shift << 2) | 0x02
+    let shift = (1 + pitch / 4).clamp(1, 15) as u16;
+    (shift << 2) | 0x03
 }
 
 /// Set the global SPU noise frequency from a noise note's pitch (last writer
