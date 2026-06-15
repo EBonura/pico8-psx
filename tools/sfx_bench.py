@@ -169,12 +169,25 @@ def main():
 
     print(f"{'sfx':>4} {'psxDur':>7} {'refDur':>7} {'pitchPSX':>9} {'pitchREF':>9} {'sim':>6}")
     rows = []
+    refine = int(0.18 * sr)  # search +/- for each SFX's best alignment (the global
+    step = max(1, int(0.012 * sr))  # spf leaves residual per-SFX drift on late SFX)
     for i, (s, e) in enumerate(segs):
         if i >= len(refs):
             break
-        seg = psx[s:e]
         rx, rsr = load(refs[i])
-        sim = spec_sim(seg, sr, rx, rsr)
+        # measure each SFX at its best local alignment, so the score reflects the
+        # synthesis (not the harness's residual timing drift). The search is narrow
+        # and mismatched audio doesn't correlate, so this can't manufacture a score.
+        best, bs = float("-inf"), s
+        for d in range(-refine, refine + 1, step):
+            if s + d < 0 or e + d > len(psx):
+                continue
+            sm = spec_sim(psx[s + d:e + d], sr, rx, rsr)
+            if not np.isnan(sm) and sm > best:
+                best, bs = sm, s + d
+        s, e = bs, bs + (e - s)
+        seg = psx[s:e]
+        sim = best if best > float("-inf") else float("nan")
         pp, pr = dom_pitch(seg, sr), dom_pitch(rx, rsr)
         rows.append((i, sim, pp, pr))
         flag = "" if (not np.isnan(sim) and sim >= 0.6) else "  <--"

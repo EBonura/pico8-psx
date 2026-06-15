@@ -31,16 +31,35 @@ period = sr / FUND     # ~84.0 samples
 CYCLES = 20                 # 20 cycles * 84 = 1680 samples; period is exactly 84.0
 NCYC_LEN = CYCLES * 84      # so harmonic k lands exactly on FFT bin CYCLES*k (no leakage)
 
+import os
+# SPU gaussian-interpolation pre-emphasis (EXPERIMENT, default OFF). Idea: the SPU
+# 4-point interp lowpasses the upper harmonics (PSX is 2-4x weaker than PICO-8
+# above ~1kHz), so boost them in the wavetable to land back on PICO-8's spectrum.
+# RESULT (2026-06-15, sfx_bench): INEFFECTIVE -- the SPU lowpass attenuates the
+# boosted harmonics right back (output high/low energy ratio unchanged 0.268->
+# 0.269; SFX similarity unchanged). The highs can't be recovered by pre-emphasis;
+# keep it off (ground-truth wavetables). The only real lever would be LONGER
+# wavetables (finer interp grid) + a pitch-table recalibration.
+PREEMPH_KC = float(os.environ.get("PREEMPH_KC", "4"))
+PREEMPH_BMAX = float(os.environ.get("PREEMPH_BMAX", "1.0"))  # 1.0 = off (default)
+
+def preemph(k):
+    if k <= PREEMPH_KC or PREEMPH_BMAX <= 1.0:
+        return 1.0
+    t = (k - PREEMPH_KC) / (TONAL_SAMPLES // 2 - PREEMPH_KC)
+    return 1.0 + (PREEMPH_BMAX - 1.0) * t
+
 def extract_period(seg):
     """One 56-sample cycle reconstructed from the measured harmonics h1..h28,
-    preserving each harmonic's true amplitude+phase (hence timbre AND loudness)."""
+    preserving each harmonic's true amplitude+phase (hence timbre AND loudness),
+    with an optional SPU-lowpass pre-emphasis on the upper harmonics."""
     seg = seg[:NCYC_LEN] - seg[:NCYC_LEN].mean()
     S = np.fft.rfft(seg)
     B = np.zeros(TONAL_SAMPLES//2 + 1, dtype=complex)
     for k in range(1, TONAL_SAMPLES//2 + 1):       # harmonics 1..28
         bin_k = CYCLES * k
         if bin_k < len(S):
-            B[k] = S[bin_k] * (TONAL_SAMPLES / NCYC_LEN)
+            B[k] = S[bin_k] * (TONAL_SAMPLES / NCYC_LEN) * preemph(k)
     return np.fft.irfft(B, n=TONAL_SAMPLES)
 
 # extract all tonal periods at NATURAL amplitude (keeps loudness ratios)
