@@ -237,6 +237,7 @@ struct Obj {
     grapple_jump_grace_y: Fix32,
     t_grapple_pickup: i32,
     wipe_timer: i32,
+    oid: i32, // spawn id = level*100 + tx + ty*128 (checkpoint/berry persistence)
 }
 
 const NONE: usize = usize::MAX;
@@ -290,12 +291,19 @@ const OBJ0: Obj = Obj {
     grapple_jump_grace_y: Fix32::ZERO,
     t_grapple_pickup: 0,
     wipe_timer: 0,
+    oid: -1,
 };
 
 const MAX_OBJ: usize = 48;
 static mut OBJ: [Obj; MAX_OBJ] = [OBJ0; MAX_OBJ];
 static mut PLAYER: usize = NONE;
 static mut HAVE_GRAPPLE: bool = false;
+// Active checkpoint oid (-1 = none); reset per level. The player respawns here.
+static mut LEVEL_CHECKPOINT: i32 = -1;
+// Deposited-berry oids for the whole run, so collected berries don't respawn or
+// re-count on a level restart/re-entry.
+static mut COLLECTED: [i32; 32] = [-1; 32];
+static mut COLLECTED_N: usize = 0;
 static mut FREEZE: i32 = 0;
 static mut SHAKE: i32 = 0;
 static mut CAM_X: i32 = 0;
@@ -413,9 +421,20 @@ fn create(otype: ObjType, x: i32, y: i32) -> usize {
         OBJ[i].otype = otype;
         OBJ[i].x = fi(x);
         OBJ[i].y = fi(y);
+        OBJ[i].oid = LVL_INDEX * 100 + (x / 8) + (y / 8) * 128;
         OBJ[i].spr = fi(type_spr(otype));
         init_obj(i);
         i
+    }
+}
+
+unsafe fn is_collected(id: i32) -> bool {
+    COLLECTED[..COLLECTED_N].iter().any(|&c| c == id)
+}
+unsafe fn mark_collected(id: i32) {
+    if COLLECTED_N < COLLECTED.len() && !is_collected(id) {
+        COLLECTED[COLLECTED_N] = id;
+        COLLECTED_N += 1;
     }
 }
 
@@ -1185,6 +1204,12 @@ unsafe fn player_update(i: usize) {
             }
         }
         99 | 100 => {
+            if OBJ[i].state == 100 {
+                OBJ[i].x += fi(1); // stride off-screen during the wipe
+                if OBJ[i].wipe_timer == 5 && LVL_INDEX > 1 {
+                    psfx(17, 24, 9); // level-finish sound
+                }
+            }
             OBJ[i].wipe_timer += 1;
             if OBJ[i].wipe_timer > 20 {
                 if OBJ[i].state == 99 {
@@ -1308,7 +1333,10 @@ unsafe fn player_update(i: usize) {
                 }
             }
             ObjType::Checkpoint => {
-                let _ = j;
+                if LEVEL_CHECKPOINT != OBJ[j].oid && overlaps(i, j, Fix32::ZERO, Fix32::ZERO) {
+                    LEVEL_CHECKPOINT = OBJ[j].oid;
+                    psfx_lock(8, 24, 6, 40); // PICO-8 lock 20 doubled
+                }
             }
             _ => {}
         }
@@ -1556,8 +1584,9 @@ unsafe fn obj_update(i: usize) {
                 }
             } else if OBJ[i].link != NONE {
                 let p = OBJ[i].link;
-                OBJ[i].x += (OBJ[p].x - OBJ[i].x) / fi(8);
-                OBJ[i].y += (OBJ[p].y - fi(4) - OBJ[i].y) / fi(8);
+                // per-frame approach is halved for 60fps (PICO-8 ran this at 30)
+                OBJ[i].x += (OBJ[p].x - OBJ[i].x) / fi(8) * HALF;
+                OBJ[i].y += (OBJ[p].y - fi(4) - OBJ[i].y) / fi(8) * HALF;
                 let grounded = check_solid(p, Fix32::ZERO, fi(1)) && OBJ[p].state != 99;
                 if grounded {
                     OBJ[i].timer += 1;
@@ -1568,6 +1597,8 @@ unsafe fn obj_update(i: usize) {
                     psfx_lock(8, 8, 8, 40);
                     OBJ[i].stop = true;
                     OBJ[i].timer = 0;
+                    BERRY_COUNT += 1;
+                    mark_collected(OBJ[i].oid); // don't respawn/re-count on restart
                 }
             }
         }
@@ -1707,6 +1738,7 @@ unsafe fn goto_level(index: i32) {
     let idx = index.clamp(1, (LEVELS.len() - 1) as i32);
     LVL_INDEX = idx;
     let m = &LEVELS[idx as usize];
+    LEVEL_CHECKPOINT = -1; // checkpoints don't carry across levels
     // Titled levels show a 60-frame intro card (doubled to 120 for 60fps).
     LEVEL_INTRO = if m.title.is_empty() { 0 } else { 120 };
     if idx == 2 {
@@ -1763,14 +1795,27 @@ unsafe fn restart_level() {
             if t == ObjType::None {
                 continue;
             }
+            let oid = LVL_INDEX * 100 + tx + ty * 128;
+            // already-collected berries don't respawn (or re-count)
+            if t == ObjType::Berry && is_collected(oid) {
+                continue;
+            }
             if t == ObjType::Player {
-                if spawned_player {
-                    continue; // one player at the first spawn tile
+                // with a checkpoint active, skip the level's start spawn; the
+                // active checkpoint spawns the player instead.
+                if spawned_player || LEVEL_CHECKPOINT >= 0 {
+                    continue;
                 }
                 spawned_player = true;
                 CAM_X = (tx * 8 - 64).clamp(0, (LVL_W * 8 - 128).max(0));
             }
             create(t, tx * 8, ty * 8);
+            // if this is the active checkpoint, spawn the player on it
+            if t == ObjType::Checkpoint && oid == LEVEL_CHECKPOINT && !spawned_player {
+                create(ObjType::Player, tx * 8, ty * 8);
+                spawned_player = true;
+                CAM_X = (tx * 8 - 64).clamp(0, (LVL_W * 8 - 128).max(0));
+            }
             // Blank the spawn tile so the map doesn't draw it under the object.
             let bi = (tx + ty * LVL_W) as usize;
             if bi < LEVEL_BUF.len() {
@@ -1791,6 +1836,8 @@ pub fn init() {
         MINUTES = 0;
         BERRY_COUNT = 0;
         DEATH_COUNT = 0;
+        COLLECTED_N = 0; // fresh run: no berries collected yet
+        LEVEL_CHECKPOINT = -1;
         SHOW_SCORE = 0;
         TITLE_FLASH = i32::MIN;
         LEVEL_INTRO = 0;

@@ -216,27 +216,22 @@ pub fn line(x: i16, y: i16, x2: i16, y2: i16, c: i32) {
     gpu::draw_line_mono(sx(x), sy(y), sx(x2), sy(y2), r, g, b);
 }
 
-/// PICO-8 `circfill(x,y,r,c)` -- span-filled from horizontal rows.
-///
-/// `dx` is tracked monotonically downward as `dy` grows (it only ever
-/// decreases), so the total span work is O(r), not O(r^2). Rows are drawn
-/// symmetrically about the centre. This is hot: clouds/hair/particles issue
-/// dozens of circfills per frame.
+/// PICO-8 `circfill(x,y,r,c)` -- one 1px span per row, drawn symmetrically about
+/// the centre. `dx` is tracked monotonically downward as `dy` grows (it only ever
+/// decreases), so the total span work is O(r), not the naive O(r^2). This is hot
+/// (clouds/hair/particles issue dozens per frame) but with the real VBlank sync
+/// there's ample budget, so spans stay 1px for exact circles.
 pub fn circfill(cx: i16, cy: i16, radius: i16, c: i32) {
     if radius < 0 {
         return;
     }
     let (r, g, b) = rgb(c);
     let r2 = radius as i32 * radius as i32;
-    // Spans are `step` px tall. For larger circles (clouds, the death ring) 2px
-    // rows halve the primitive count with no visible difference; small circles
-    // (hair, orb glow) stay crisp at 1px.
-    let step = if radius >= 5 { 2 } else { 1 };
-    let band = |dx: i32, ytop: i16, h: i16| {
+    let row = |dx: i32, yy: i16| {
         let x0 = sx(cx - dx as i16);
         let x1 = sx(cx + dx as i16 + 1);
-        let y0 = sy(ytop);
-        let y1 = sy(ytop + h);
+        let y0 = sy(yy);
+        let y1 = sy(yy + 1);
         gpu::draw_quad_flat([(x0, y0), (x1, y0), (x0, y1), (x1, y1)], r, g, b);
     };
     let mut dx = radius as i32;
@@ -245,11 +240,11 @@ pub fn circfill(cx: i16, cy: i16, radius: i16, c: i32) {
         while dx * dx + dy * dy > r2 {
             dx -= 1;
         }
-        band(dx, cy + dy as i16 - (step - 1) as i16, step); // band ending at cy+dy
+        row(dx, cy + dy as i16);
         if dy != 0 {
-            band(dx, cy - dy as i16 - (step - 1) as i16, step); // mirror above
+            row(dx, cy - dy as i16);
         }
-        dy += step as i32;
+        dy += 1;
     }
 }
 

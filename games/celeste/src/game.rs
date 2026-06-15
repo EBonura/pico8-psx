@@ -894,6 +894,7 @@ unsafe fn player_spawn_draw(this: *mut Obj) {
     set_hair_color(MAX_DJUMP);
     draw_hair(this, 1);
     p8spr((*this).spr.to_int(), (*this).x.to_int(), (*this).y.to_int(), (*this).flip_x, (*this).flip_y);
+    backend::flush(); // draw with the hair palette before resetting it (shared CLUT)
     unset_hair_color();
 }
 
