@@ -887,6 +887,21 @@ unsafe fn player_spring(i: usize, by: Fix32) {
     OBJ[i].link = NONE;
     let snap = by - OBJ[i].y;
     move_y_exact(i, snap);
+    // break any crumble sitting under the springboard
+    if sb != NONE {
+        for j in 0..MAX_OBJ {
+            if OBJ[j].exists
+                && !OBJ[j].destroyed
+                && OBJ[j].otype == ObjType::Crumble
+                && !OBJ[j].breaking
+                && overlaps(sb, j, Fix32::ZERO, fi(4))
+            {
+                OBJ[j].breaking = true;
+                OBJ[j].timer = 0;
+                psfx(8, 20, 4);
+            }
+        }
+    }
 }
 
 /// True if the player is falling onto `o` from above (snowball/springboard).
@@ -1060,6 +1075,7 @@ unsafe fn player_update(i: usize) {
             if !grabbed && (!GRAP_HELD || (OBJ[i].y - OBJ[i].grapple_y).abs() > fi(8)) {
                 OBJ[i].state = 0;
                 OBJ[i].grapple_retract = true;
+                psfx(-2, 0, 0); // cut the grapple-throw sound short on release
             }
         }
         11 => {
@@ -1500,12 +1516,16 @@ unsafe fn obj_update(i: usize) {
             if move_x(i, sx, Collide::Stop) && !snowball_hurt(i) {
                 OBJ[i].spd.x = -OBJ[i].spd.x;
                 OBJ[i].rem.x = Fix32::ZERO;
+                OBJ[i].freeze = 2; // PICO-8 freeze=1 doubled for 60fps
+                psfx(17, 0, 2);
             }
             if move_y(i, sy, Collide::Stop) {
                 if OBJ[i].spd.y >= fi(4) {
                     OBJ[i].spd.y = fi(-2);
+                    psfx(17, 0, 2);
                 } else if OBJ[i].spd.y >= fi(1) {
                     OBJ[i].spd.y = fi(-1);
+                    psfx(17, 0, 2);
                 } else {
                     OBJ[i].spd.y = Fix32::ZERO;
                 }
