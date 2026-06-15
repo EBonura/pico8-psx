@@ -131,6 +131,18 @@ pub fn run() {
     }
 }
 
+
+/// Offline single-SFX test: play `sfx(id)` once then idle, looping. For checking
+/// an isolated SFX's notes/timbre against PICO-8.
+pub fn run_sfx_test(id: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    loop {
+        sfx::play(id);
+        for _ in 0..240 { sfx::update(); gpu::vsync(); }
+    }
+}
+
 /// Number of silent frames played between SFX in the soundtest. Doubles as
 /// the split marker for the host capture (a clear gap between clips).
 pub const SOUNDTEST_GAP_FRAMES: u32 = 18; // ~0.3s

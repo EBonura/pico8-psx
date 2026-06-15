@@ -46,8 +46,6 @@ const SFX_VOICE_BASE: usize = 4;
 // that with one static wavetable, so a phaser note also keys a "buddy" voice
 // (v + 8, i.e. voices 8..15, otherwise unused) playing a detuned triangle.
 const PHASER_BUDDY: usize = 8;
-const PHASER_DETUNE_NUM: i32 = 109; // buddy freq = pitch * 109/110 (zepto8)
-const PHASER_DETUNE_DEN: i32 = 110;
 
 const TICK_INC: i32 = 256;
 const TICK_PER_SPEED: i32 = 128;
@@ -110,6 +108,14 @@ fn noise_clock(pitch: i32) -> u16 {
 unsafe fn set_noise_freq(pitch: i32) {
     let cnt = reg_read16(SPUCNT_REG) & !0x3F00;
     reg_write16(SPUCNT_REG, cnt | (noise_clock(pitch) << 8));
+}
+
+/// Phaser buddy pitch for an SPU pitch + PICO-8 key. zepto8: the two oscillators
+/// are detuned less at higher pitch (denom ~97 at c0 .. ~127 at c5), so high notes
+/// beat slower instead of warbling. denom = 97 + key/2; buddy = pitch*(denom-1)/denom.
+fn phaser_buddy_pitch(spu_pitch: i32, key: i32) -> u16 {
+    let denom = 97 + key / 2;
+    (spu_pitch * (denom - 1) / denom) as u16
 }
 
 #[derive(Clone, Copy)]
@@ -375,9 +381,7 @@ unsafe fn start_channel_note(v: usize) {
         let buddy = v + PHASER_BUDDY;
         let bv = Voice::new(buddy as u8);
         bv.set_volume(Volume(vb), Volume(vb));
-        bv.set_pitch(Pitch::raw(
-            (spu_pitch as i32 * PHASER_DETUNE_NUM / PHASER_DETUNE_DEN) as u16,
-        ));
+        bv.set_pitch(Pitch::raw(phaser_buddy_pitch(spu_pitch as i32, sfx_pitch(note))));
         bv.set_start_addr(SpuAddr::new(tri));
         Voice::key_on((1 << v) | (1 << buddy));
         CHANNELS[v].keyed_on = true;
@@ -411,18 +415,22 @@ unsafe fn apply_effects(v: usize) {
     }
     let t = ch.tick;
     let voice = Voice::new(v as u8);
+    let phaser = instr == 7;
+    // Effects set a new pitch OR volume; route both through the phaser's detuned
+    // buddy voice too, or e.g. a fade-out leaves the buddy ringing (muffles the
+    // percussion -- celeste1's kick is a phaser at pitch 1 with fade-out).
+    let mut set_pitch: Option<i32> = None;
+    let mut set_vol: Option<i32> = None;
     match effect {
         1 => {
-            // slide (portamento): glide from the PREVIOUS note's pitch up/down to
-            // this note's pitch over the row. The effect sits on the destination.
+            // slide (portamento): glide from the PREVIOUS note's pitch to this one.
             let from = if ch.note_pos > 0 {
                 let pn = AUDIO.sfx_notes[ch.sfx_id as usize][(ch.note_pos - 1) as usize];
                 get_pitch(sfx_pitch(pn), instr) as i32
             } else {
                 base_pitch
             };
-            let p = (from + ((base_pitch - from) * t) / total).clamp(1, 0x3FFF);
-            voice.set_pitch(Pitch::raw(p as u16));
+            set_pitch = Some(from + ((base_pitch - from) * t) / total);
         }
         2 => {
             // vibrato
@@ -435,40 +443,49 @@ unsafe fn apply_effects(v: usize) {
             } else {
                 phase - 256
             };
-            let mut p = base_pitch + (m * base_pitch) / 2048;
-            p = p.clamp(1, 0x3FFF);
-            voice.set_pitch(Pitch::raw(p as u16));
+            set_pitch = Some(base_pitch + (m * base_pitch) / 2048);
         }
         3 => {
             // drop
-            let mut p = base_pitch * (total - t) / total;
-            if p < 0 {
-                p = 0;
-            }
-            voice.set_pitch(Pitch::raw(p as u16));
+            set_pitch = Some((base_pitch * (total - t) / total).max(0));
         }
         4 => {
             // fade in
-            let vv = (VOL_TABLE[vol as usize] as u32 * t as u32 / total as u32) as i16;
-            voice.set_volume(Volume(vv), Volume(vv));
+            set_vol = Some(VOL_TABLE[vol as usize] as i32 * t / total);
         }
         5 => {
             // fade out
-            let vv = (VOL_TABLE[vol as usize] as u32 * (total - t) as u32 / total as u32) as i16;
-            voice.set_volume(Volume(vv), Volume(vv));
+            set_vol = Some(VOL_TABLE[vol as usize] as i32 * (total - t) / total);
         }
         6 | 7 => {
             // arpeggio: cycle the 4 notes of the current group (pos & ~3 .. +3),
             // holding each 4 (fast) or 8 (slow) PICO-8 ticks -- halved if speed<=8.
             let hold_base = if effect == 6 { 4 } else { 8 };
             let hold = if speed <= 8 { (hold_base / 2).max(1) } else { hold_base };
-            let gtick = ch.note_pos * speed + t / TICK_PER_SPEED; // ticks since sfx start
+            let gtick = ch.note_pos * speed + t / TICK_PER_SPEED;
             let idx = (gtick / hold) % 4;
             let g = ((ch.note_pos & !3) + idx).clamp(0, 31);
             let an = AUDIO.sfx_notes[ch.sfx_id as usize][g as usize];
-            voice.set_pitch(Pitch::raw(get_pitch(sfx_pitch(an), instr)));
+            set_pitch = Some(get_pitch(sfx_pitch(an), instr) as i32);
         }
         _ => {}
+    }
+    if let Some(p) = set_pitch {
+        let p = p.clamp(1, 0x3FFF);
+        voice.set_pitch(Pitch::raw(p as u16));
+        if phaser {
+            Voice::new((v + PHASER_BUDDY) as u8)
+                .set_pitch(Pitch::raw(phaser_buddy_pitch(p, pitch_key)));
+        }
+    }
+    if let Some(vv) = set_vol {
+        if phaser {
+            voice.set_volume(Volume((vv * 2 / 3) as i16), Volume((vv * 2 / 3) as i16));
+            Voice::new((v + PHASER_BUDDY) as u8)
+                .set_volume(Volume((vv / 3) as i16), Volume((vv / 3) as i16));
+        } else {
+            voice.set_volume(Volume(vv as i16), Volume(vv as i16));
+        }
     }
 }
 
