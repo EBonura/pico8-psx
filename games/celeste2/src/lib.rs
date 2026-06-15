@@ -136,6 +136,38 @@ pub fn run_sfx_test(id: i32) {
     }
 }
 
+/// Silent gap (frames) between SFX in the soundtest; the host splits the capture
+/// on these. Keep in sync with the splitter in tools/compare_sfx.py.
+pub const SOUNDTEST_GAP_FRAMES: u32 = 18;
+
+/// Offline SFX soundtest: play SFX `0..frames.len()` one at a time, each for a
+/// FIXED window `frames[n]` (so the host can split the captured SPU output at
+/// exact offsets), separated by [`SOUNDTEST_GAP_FRAMES`] of silence. Diffed
+/// against the PICO-8 reference recordings (audio-ref/celeste2/sfx). Uses
+/// gpu::vsync() (not the in-game vblank sync) so its frame timing matches how
+/// the references were captured. Not part of the game.
+pub fn run_sfx_soundtest(frames: &[u16]) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    let mut n: usize = 0;
+    loop {
+        sfx::play(-1);
+        for _ in 0..SOUNDTEST_GAP_FRAMES {
+            sfx::update();
+            gpu::vsync();
+        }
+        if n >= frames.len() {
+            return;
+        }
+        sfx::play(n as i32);
+        for _ in 0..frames[n] {
+            sfx::update();
+            gpu::vsync();
+        }
+        n += 1;
+    }
+}
+
 /// Offline music test: play `music(pattern)` and run the sequencer forever, so
 /// the host can capture the exact same song the cart plays and compare it,
 /// note-aligned, with a PICO-8 recording of `music(pattern)`. Not part of the
