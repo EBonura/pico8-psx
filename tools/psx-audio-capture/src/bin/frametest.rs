@@ -85,6 +85,17 @@ fn main() {
         })
         .unwrap_or((0, -1));
 
+    // --profile [--profile-from FRAME]: sample the CPU PC every instruction into
+    // a flat histogram (RAM base 0x80010000), dump the hottest addresses at the
+    // end. Map those to functions with the ELF symbol table.
+    let profile = arg("--profile").is_some();
+    let profile_from: i64 = arg("--profile-from")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(if press_at >= 0 { press_at + 120 } else { 120 });
+    const PROF_BASE: u32 = 0x8001_0000;
+    let mut pc_hist: Vec<u64> = if profile { vec![0u64; 0x80_000] } else { Vec::new() };
+    let mut prof_samples: u64 = 0;
+
     let mut steps = 0u64;
     for frame in 0..frames {
         // Decide this frame's held buttons.
@@ -97,8 +108,19 @@ fn main() {
         }
         bus.set_port1_buttons(ButtonState::from_bits(mask));
 
+        let profiling = profile && frame as i64 >= profile_from;
         let mut accum = 0u64;
         while accum < CYCLES_PER_FRAME && steps < STEP_CAP {
+            if profiling {
+                let pc = cpu.pc();
+                if pc >= PROF_BASE {
+                    let idx = ((pc - PROF_BASE) >> 2) as usize;
+                    if idx < pc_hist.len() {
+                        pc_hist[idx] += 1;
+                        prof_samples += 1;
+                    }
+                }
+            }
             let before = bus.cycles();
             if let Err(e) = cpu.step(&mut bus) {
                 eprintln!("[frametest] CPU stopped at step {steps}: {e:?}");
@@ -123,6 +145,30 @@ fn main() {
             "[frametest] real render rate: {swaps} swaps over {secs:.2}s = {:.1} fps (target 60)",
             swaps as f64 / secs
         );
+    }
+
+    if profile {
+        // Dump every nonzero PC bucket to a file (pc<TAB>count) for external
+        // per-function aggregation, plus the top 60 to stderr.
+        let mut buckets: Vec<(u32, u64)> = pc_hist
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c > 0)
+            .map(|(i, &c)| (PROF_BASE + (i as u32) * 4, c))
+            .collect();
+        buckets.sort_by(|a, b| b.1.cmp(&a.1));
+        let prof_out = arg("--profile-out").unwrap_or_else(|| "/tmp/pcprof.txt".into());
+        let mut body = String::new();
+        for (pc, c) in &buckets {
+            body.push_str(&format!("{pc:08x}\t{c}\n"));
+        }
+        std::fs::write(&prof_out, body).expect("write profile");
+        eprintln!("[frametest] {prof_samples} PC samples; full histogram -> {prof_out}");
+        eprintln!("[frametest] top 60 hottest instructions:");
+        for (pc, c) in buckets.iter().take(60) {
+            let pct = *c as f64 / prof_samples.max(1) as f64 * 100.0;
+            eprintln!("  0x{pc:08x}  {c:>9}  {pct:5.2}%");
+        }
     }
 
     let (rgba, w, h) = bus.gpu.display_rgba8();

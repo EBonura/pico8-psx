@@ -46,6 +46,15 @@ const AUDIO: AudioData = AudioData {
     music_pattern_count: 42,
 };
 
+/// Wait for the next real VBlank IRQ. The SDK's `gpu::vsync()` busy-waits a fixed
+/// 242 hblanks (~15.4ms) instead of syncing to the display, leaving almost no
+/// per-frame compute budget; the VBlank IRQ counter gives the full ~16.6ms frame.
+#[inline]
+fn wait_vblank() {
+    let v = psx_rt::interrupts::vblank_count();
+    while psx_rt::interrupts::vblank_count() == v {}
+}
+
 /// Boot Celeste 2 and run its 60fps frame loop until Select+Start is held.
 pub fn run() {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
@@ -95,7 +104,7 @@ pub fn run() {
         fb.clear(0, 0, 16); // PICO-8 dark-blue backdrop
         game::draw();
         gpu::draw_sync();
-        gpu::vsync();
+        wait_vblank();
         fb.swap();
 
         // Advance the music/SFX by the VBlanks actually elapsed (real-time tempo).

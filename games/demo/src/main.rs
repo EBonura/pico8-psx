@@ -56,8 +56,17 @@ const CENTER1: i16 = COVER1_X + COVER_W / 2;
 const CENTER2: i16 = COVER2_X + COVER_W / 2;
 const SCREEN_CX: i16 = 160;
 
+/// Wait for the next real VBlank IRQ (the SDK's `gpu::vsync()` busy-waits a fixed
+/// 242 hblanks ~= 15.4ms instead of syncing to the display).
+#[inline]
+fn wait_vblank() {
+    let v = psx_rt::interrupts::vblank_count();
+    while psx_rt::interrupts::vblank_count() == v {}
+}
+
 #[no_mangle]
 fn main() {
+    psx_rt::interrupts::install_vblank_counter();
     loop {
         match show_menu() {
             0 => celeste::run(),
@@ -140,7 +149,7 @@ fn show_menu() -> usize {
         font.draw_text(SCREEN_CX - text_half(&font, hint), 212, hint, (0x60, 0x60, 0x60));
 
         gpu::draw_sync();
-        gpu::vsync();
+        wait_vblank();
         fb.swap();
     }
 }

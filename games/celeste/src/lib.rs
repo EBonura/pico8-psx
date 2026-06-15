@@ -71,6 +71,16 @@ fn pad_mask() -> u8 {
     mask
 }
 
+/// Wait for the next real VBlank IRQ. The SDK's `gpu::vsync()` busy-waits a fixed
+/// 242 hblanks (~15.4ms) from when it's called instead of syncing to the display,
+/// which left only ~1.3ms of per-frame compute before dropping below 60fps. The
+/// VBlank IRQ counter (already installed for audio) gives the full ~16.6ms frame.
+#[inline]
+fn wait_vblank() {
+    let v = psx_rt::interrupts::vblank_count();
+    while psx_rt::interrupts::vblank_count() == v {}
+}
+
 /// Boot Celeste and run its 60fps frame loop until Select+Start is held.
 pub fn run() {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
@@ -106,12 +116,12 @@ pub fn run() {
         // Freeze frames (dash/orb): hold the last drawn frame on screen by not
         // redrawing or swapping -- exactly the PICO-8 freeze effect.
         if game::freeze() > 0 {
-            gpu::vsync();
+            wait_vblank();
         } else {
             fb.clear(0, 0, 0);
             game::draw();
             gpu::draw_sync();
-            gpu::vsync();
+            wait_vblank();
             fb.swap();
         }
 
