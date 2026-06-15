@@ -128,8 +128,14 @@ pub fn spr(n: i32, x: i16, y: i16, flip_x: bool, flip_y: bool) {
     }
 
     // Flipped: textured quad, corners TL,TR,BL,BR; swap UV per axis.
-    let (ul, ur) = if flip_x { (u0 + 16, u0) } else { (u0, u0 + 16) };
-    let (vt, vb) = if flip_y { (v0 + 16, v0) } else { (v0, v0 + 16) };
+    // The far UV edge is u0/v0 + 16, but UVs are u8: a last-column sprite (u0=240,
+    // e.g. the smoke's final frame 31) would wrap 256 -> 0 and the quad would
+    // sample the whole texture row as vertical multicolour garbage. Clamp the far
+    // edge to 255 (the last texel) so it stays inside the sprite's tile.
+    let u_hi = (u0 as u16 + 16).min(255) as u8;
+    let v_hi = (v0 as u16 + 16).min(255) as u8;
+    let (ul, ur) = if flip_x { (u_hi, u0) } else { (u0, u_hi) };
+    let (vt, vb) = if flip_y { (v_hi, v0) } else { (v0, v_hi) };
     let verts = [(px, py), (px + 16, py), (px, py + 16), (px + 16, py + 16)];
     let uvs = [(ul, vt), (ur, vt), (ul, vb), (ur, vb)];
     gpu::draw_quad_textured(verts, uvs, clut_word, GFX_TPAGE.uv_tpage_word(0), (0x80, 0x80, 0x80));
