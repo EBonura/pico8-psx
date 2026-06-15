@@ -10,6 +10,25 @@ pub struct LevelMeta {
     pub height: i32,
     pub camera_mode: i32,
     pub music: i32,
+    /// Cloud colour (PICO-8 `level.clouds or 13`).
+    pub clouds: i32,
+    /// Background clear colour (`level.bg or 0`).
+    pub bg: i32,
+    /// Foreground fog: 0 none, 1 sparse, 2 dense.
+    pub fogmode: i32,
+    /// Dithered background pillars: -1 none, else fill colour.
+    pub columns: i32,
+    /// Per-level palette swap: 0 none, 1 pal(2,12)+pal(5,2), 2 pal(2,14)+pal(5,2),
+    /// 3 pal(2,1)+pal(7,11).
+    pub pal_id: i32,
+    /// Intro-card title ("" = no card).
+    pub title: &'static str,
+    /// Camera x-barrier tile column (-1 none).
+    pub barrier_x: i32,
+    /// Camera y-barrier tile row (-1 none).
+    pub barrier_y: i32,
+    /// Clamp the player at the right edge instead of advancing (level 8).
+    pub right_edge: bool,
 }
 
 pub static LEVEL_1_TILES: [u8; 1536] = [
@@ -250,13 +269,22 @@ pub static LEVEL_8_TILES: [u8; 992] = [
 
 pub static LEVELS: [LevelMeta; 9] = [
     // Level 0: titlescreen placeholder (no decompressed map).
-    LevelMeta { tiles: &[], width: 0, height: 0, camera_mode: 0, music: 0 },
-    LevelMeta { tiles: &LEVEL_1_TILES, width: 96, height: 16, camera_mode: 1, music: 38 },
-    LevelMeta { tiles: &LEVEL_2_TILES, width: 32, height: 32, camera_mode: 2, music: 36 },
-    LevelMeta { tiles: &LEVEL_3_TILES, width: 128, height: 22, camera_mode: 3, music: 2 },
-    LevelMeta { tiles: &LEVEL_4_TILES, width: 128, height: 32, camera_mode: 4, music: 2 },
-    LevelMeta { tiles: &LEVEL_5_TILES, width: 128, height: 16, camera_mode: 5, music: 2 },
-    LevelMeta { tiles: &LEVEL_6_TILES, width: 128, height: 16, camera_mode: 6, music: 2 },
-    LevelMeta { tiles: &LEVEL_7_TILES, width: 128, height: 16, camera_mode: 7, music: 2 },
-    LevelMeta { tiles: &LEVEL_8_TILES, width: 16, height: 62, camera_mode: 8, music: 2 },
+    LevelMeta { tiles: &[], width: 0, height: 0, camera_mode: 0, music: 0,
+        clouds: 13, bg: 0, fogmode: 0, columns: -1, pal_id: 0, title: "", barrier_x: -1, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_1_TILES, width: 96, height: 16, camera_mode: 1, music: 38,
+        clouds: 13, bg: 0, fogmode: 0, columns: -1, pal_id: 0, title: "", barrier_x: -1, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_2_TILES, width: 32, height: 32, camera_mode: 2, music: 36,
+        clouds: 0, bg: 0, fogmode: 1, columns: 1, pal_id: 0, title: "", barrier_x: -1, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_3_TILES, width: 128, height: 22, camera_mode: 3, music: 2,
+        clouds: 13, bg: 0, fogmode: 0, columns: -1, pal_id: 0, title: "trailhead", barrier_x: 38, barrier_y: 6, right_edge: false },
+    LevelMeta { tiles: &LEVEL_4_TILES, width: 128, height: 32, camera_mode: 4, music: 2,
+        clouds: 13, bg: 0, fogmode: 0, columns: 1, pal_id: 1, title: "glacial caves", barrier_x: -1, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_5_TILES, width: 128, height: 16, camera_mode: 5, music: 2,
+        clouds: 15, bg: 13, fogmode: 2, columns: -1, pal_id: 2, title: "golden valley", barrier_x: -1, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_6_TILES, width: 128, height: 16, camera_mode: 6, music: 2,
+        clouds: 15, bg: 13, fogmode: 2, columns: -1, pal_id: 2, title: "", barrier_x: 105, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_7_TILES, width: 128, height: 16, camera_mode: 7, music: 2,
+        clouds: 7, bg: 13, fogmode: 2, columns: -1, pal_id: 1, title: "", barrier_x: -1, barrier_y: -1, right_edge: false },
+    LevelMeta { tiles: &LEVEL_8_TILES, width: 16, height: 62, camera_mode: 8, music: 2,
+        clouds: 7, bg: 15, fogmode: 2, columns: -1, pal_id: 3, title: "destination", barrier_x: -1, barrier_y: -1, right_edge: true },
 ];

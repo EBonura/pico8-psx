@@ -16,7 +16,7 @@
 #![allow(static_mut_refs)]
 
 use crate::assets::gfx::GFX_DATA;
-use crate::assets::levels::LEVELS;
+use crate::assets::levels::{LEVELS, LevelMeta};
 use crate::assets::tilemap::TILE_FLAGS;
 use pico8::backend::{self, Cart};
 use pico8::fixed::{fx, Fix32};
@@ -301,7 +301,21 @@ static mut SHAKE: i32 = 0;
 static mut CAM_X: i32 = 0;
 static mut CAM_Y: i32 = 0;
 static mut CAM_MODE: i32 = 1;
-static mut FRAMES: i32 = 0; // for time()-driven wobble
+static mut C_OFFSET: i32 = 0; // camera mode 6/7 follow offset
+static mut C_FLAG: bool = false; // camera mode 6 latch
+static mut FRAMES: i32 = 0; // for time()-driven wobble (and the run timer)
+// Run timer + run stats (HH:MM:SS HUD, end score panel). TIMER_F counts rendered
+// frames toward a second (FRAMES itself is the time() wobble clock, kept separate).
+static mut TIMER_F: i32 = 0;
+static mut SECONDS: i32 = 0;
+static mut MINUTES: i32 = 0;
+static mut BERRY_COUNT: i32 = 0;
+static mut DEATH_COUNT: i32 = 0;
+static mut SHOW_SCORE: i32 = -1; // <0 = inactive; ramps up on the finale
+// Title / level-intro / fade state.
+static mut TITLE_FLASH: i32 = i32::MIN; // MIN = not started; counts down once set
+static mut LEVEL_INTRO: i32 = 0;
+static mut INFADE: i32 = 60; // level-entry wipe (counts up to 60)
 static mut SCARF: [Vec2; 5] = [VZ; 5];
 
 // Background particles: drifting snow + parallax clouds (26 each).
@@ -326,22 +340,41 @@ unsafe fn init_particles() {
     }
 }
 
-/// Parallax background clouds (drawn behind the tilemap).
-unsafe fn draw_clouds() {
-    for i in 0..26 {
+/// Parallax clouds. Background pass: draw_clouds(1, 0, 1, level.clouds, 26).
+/// Foreground fog pass: draw_clouds(1.25, height*8+1, 0, 7, 16) -- pinned to the
+/// level's bottom (sy=0). (The PICO-8 clip that flattens each cloud's bottom and
+/// the fillp fog dither aren't available on the PSX backend; clouds are full
+/// circles and the fog is solid.)
+unsafe fn draw_clouds(scale: Fix32, oy: Fix32, sy: Fix32, color: i32, count: usize) {
+    for i in 0..count {
         let mut c = CLOUDS[i];
-        let s = c.s;
+        let s = c.s * scale;
         let x = fi(CAM_X) + (c.x - fi(CAM_X) * fx(0.9)).rem_floor(fi(128) + s) - s / fi(2);
-        let y = fi(CAM_Y) + (c.y - fi(CAM_Y) * fx(0.9)).rem_floor(fi(128) + s / fi(2));
+        let y = oy + (fi(CAM_Y) + (c.y - fi(CAM_Y) * fx(0.9)).rem_floor(fi(128) + s / fi(2))) * sy;
         let (xi, yi) = (x.to_int() as i16, y.to_int() as i16);
-        backend::circfill(xi, yi, (s / fi(3)).to_int() as i16, 13);
+        backend::circfill(xi, yi, (s / fi(3)).to_int() as i16, color);
         if i % 2 == 0 {
-            backend::circfill((x - s / fi(3)).to_int() as i16, yi, (s / fi(5)).to_int() as i16, 13);
-            backend::circfill((x + s / fi(3)).to_int() as i16, yi, (s / fi(6)).to_int() as i16, 13);
+            backend::circfill((x - s / fi(3)).to_int() as i16, yi, (s / fi(5)).to_int() as i16, color);
+            backend::circfill((x + s / fi(3)).to_int() as i16, yi, (s / fi(6)).to_int() as i16, color);
         }
         c.x += fi(4 - (i as i32) % 4) * fx(0.25) * HALF;
         CLOUDS[i] = c;
     }
+}
+
+/// Apply a level's palette swap (matches the `pal` closures in the level table).
+unsafe fn apply_level_pal(pal_id: i32) {
+    match pal_id {
+        1 => { backend::pal(2, 12); backend::pal(5, 2); }
+        2 => { backend::pal(2, 14); backend::pal(5, 2); }
+        3 => { backend::pal(2, 1); backend::pal(7, 11); }
+        _ => {}
+    }
+}
+
+#[inline]
+unsafe fn level() -> &'static LevelMeta {
+    &LEVELS[LVL_INDEX as usize]
 }
 
 /// Drifting snow (drawn over the scene).
@@ -627,6 +660,7 @@ unsafe fn player_die(i: usize) {
     OBJ[i].state = 99;
     FREEZE = 2;
     SHAKE = 5;
+    DEATH_COUNT += 1;
     psfx_lock(14, 16, 16, 240);
 }
 
@@ -1040,7 +1074,7 @@ unsafe fn player_update(i: usize) {
             let dead = OBJ[i].grapple_hit != NONE && OBJ[OBJ[i].grapple_hit].destroyed;
             if !GRAP_HELD || dead {
                 OBJ[i].state = 0;
-                OBJ[i].t_grapple_jump_grace = 4;
+                OBJ[i].t_grapple_jump_grace = 8; // PICO-8 4 doubled for 60fps
                 OBJ[i].grapple_jump_grace_y = OBJ[i].y;
                 OBJ[i].grapple_retract = true;
                 OBJ[i].facing *= -1;
@@ -1053,7 +1087,7 @@ unsafe fn player_update(i: usize) {
             if sign(OBJ[i].x - OBJ[i].grapple_x) == fi(OBJ[i].grapple_dir) {
                 OBJ[i].state = 0;
                 if OBJ[i].grapple_hit != NONE && OBJ[OBJ[i].grapple_hit].grapple_mode == 2 {
-                    OBJ[i].t_grapple_jump_grace = 4;
+                    OBJ[i].t_grapple_jump_grace = 8; // PICO-8 4 doubled for 60fps
                     OBJ[i].grapple_jump_grace_y = OBJ[i].y;
                 }
                 if OBJ[i].spd.x.abs() > fi(5) {
@@ -1254,13 +1288,23 @@ unsafe fn player_update(i: usize) {
                 }
             }
             ObjType::Crumble => {
-                if !OBJ[j].breaking
-                    && OBJ[i].state == 0
-                    && overlaps(i, j, Fix32::ZERO, fi(1))
-                {
-                    OBJ[j].breaking = true;
-                    OBJ[j].timer = 0;
-                    psfx(8, 20, 4);
+                if !OBJ[j].breaking {
+                    let gd = fi(OBJ[i].grapple_dir);
+                    let hit = if OBJ[i].state == 0 {
+                        overlaps(i, j, Fix32::ZERO, fi(1))
+                    } else if OBJ[i].state == 11 {
+                        // grappling into it: check the grapple direction at 3 heights
+                        overlaps(i, j, gd, Fix32::ZERO)
+                            || overlaps(i, j, gd, fi(3))
+                            || overlaps(i, j, gd, fi(-2))
+                    } else {
+                        false
+                    };
+                    if hit {
+                        OBJ[j].breaking = true;
+                        OBJ[j].timer = 0;
+                        psfx(8, 20, 4);
+                    }
                 }
             }
             ObjType::Checkpoint => {
@@ -1270,15 +1314,9 @@ unsafe fn player_update(i: usize) {
         }
     }
 
-    // reached the right edge -> advance to the next level
-    if OBJ[i].state < 99 && OBJ[i].x > fi(LVL_W * 8 - 4) {
-        OBJ[i].state = 100;
-        OBJ[i].wipe_timer = 0;
-        return;
-    }
-    // death / pit-finish
+    // death / pit (only level 1 finishes by falling off the right)
     if OBJ[i].state < 99 && (OBJ[i].y > fi(LVL_H * 8 + 16) || hazard_check(i, Fix32::ZERO, Fix32::ZERO)) {
-        if OBJ[i].x > fi(LVL_W * 8 - 64) {
+        if LVL_INDEX == 1 && OBJ[i].x > fi(LVL_W * 8 - 64) {
             OBJ[i].state = 100;
             OBJ[i].wipe_timer = -15;
         } else {
@@ -1286,9 +1324,43 @@ unsafe fn player_update(i: usize) {
         }
         return;
     }
+
+    // bounds: clamp top + left; right edge either clamps (right_edge) or advances
     if OBJ[i].y < fi(-16) {
         OBJ[i].y = fi(-16);
         OBJ[i].spd.y = Fix32::ZERO;
+    }
+    if OBJ[i].x < fi(3) {
+        OBJ[i].x = fi(3);
+        OBJ[i].spd.x = Fix32::ZERO;
+    } else if OBJ[i].x > fi(LVL_W * 8 - 3) {
+        if level().right_edge {
+            OBJ[i].x = fi(LVL_W * 8 - 3);
+            OBJ[i].spd.x = Fix32::ZERO;
+        } else {
+            OBJ[i].state = 100;
+        }
+    }
+
+    // level-1 intro bridge music transition
+    if CUR_MUSIC == LEVELS[1].music && OBJ[i].x > fi(61 * 8) {
+        CUR_MUSIC = 37;
+        music(37);
+        psfx(17, 24, 9);
+    }
+
+    // level-8 ending music + score reveal
+    if LVL_INDEX == 8 {
+        if CUR_MUSIC != 40 && OBJ[i].y > fi(40) {
+            CUR_MUSIC = 40;
+            music(40);
+        }
+        if OBJ[i].y > fi(376) {
+            SHOW_SCORE += 1;
+        }
+        if SHOW_SCORE == 120 {
+            music(38);
+        }
     }
 }
 
@@ -1451,11 +1523,24 @@ unsafe fn obj_update(i: usize) {
                     OBJ[i].y = fi(-32);
                 }
                 if OBJ[i].timer > 180 {
+                    // move back, but only respawn if nothing overlaps the slot
                     OBJ[i].x = OBJ[i].ox;
                     OBJ[i].y = OBJ[i].oy;
-                    OBJ[i].breaking = false;
-                    OBJ[i].timer = 0;
-                    psfx(17, 5, 3);
+                    let mut clear = true;
+                    for j in 0..MAX_OBJ {
+                        if overlaps(i, j, Fix32::ZERO, Fix32::ZERO) {
+                            clear = false;
+                            break;
+                        }
+                    }
+                    if clear {
+                        OBJ[i].breaking = false;
+                        OBJ[i].timer = 0;
+                        psfx(17, 5, 3);
+                    } else {
+                        OBJ[i].x = fi(-32);
+                        OBJ[i].y = fi(-32);
+                    }
                 }
             }
         }
@@ -1507,27 +1592,91 @@ unsafe fn obj_update(i: usize) {
 // ====================================================================
 
 /// The cart's 8 per-level camera modes (barrier/stateful refinements omitted).
+/// Shrink/grow the x-target so the camera can't cross a level barrier column.
+unsafe fn camera_x_barrier(tile_x: i32, px: i32, tx: &mut i32) {
+    let bx = tile_x * 8;
+    if px < bx - 8 {
+        *tx = (*tx).min(bx - 128);
+    } else if px > bx + 8 {
+        *tx = (*tx).max(bx);
+    }
+}
+
 unsafe fn camera_target() -> (i32, i32) {
     let px = OBJ[PLAYER].x.to_int();
     let py = OBJ[PLAYER].y.to_int();
-    let wlim = (LVL_W * 8 - 128).max(0);
-    let hlim = (LVL_H * 8 - 128).max(0);
-    let cx = |v: i32| v.max(0).min(wlim);
-    let cy = |v: i32| v.max(0).min(hlim);
+    let lv = level();
+    let wlim = LVL_W * 8 - 128;
+    let hlim = LVL_H * 8 - 128;
+    // The PICO-8 modes use max(min(wlim, ..)) -- ceiling only, no floor -- except
+    // modes 1/4/5/7/8 which clamp the floor; replicated below.
+    let mut tx;
+    let mut ty = 0;
     match CAM_MODE {
-        1 => (if px < 42 { 0 } else { (px - 48).max(40).min(wlim) }, 0),
-        2 => (if px < 120 { 0 } else if px > 136 { 128 } else { px - 64 }, cy(py - 64)),
-        3 => (cx(px - 56), 0),
+        1 => {
+            tx = if px < 42 { 0 } else { (px - 48).max(40).min(wlim) };
+        }
+        2 => {
+            tx = if px < 120 { 0 } else if px > 136 { 128 } else { px - 64 };
+            ty = (py - 64).min(hlim);
+        }
+        3 => {
+            tx = (px - 56).min(wlim);
+            if lv.barrier_x >= 0 {
+                camera_x_barrier(lv.barrier_x, px, &mut tx);
+            }
+            ty = if py < lv.barrier_y * 8 + 3 { 0 } else { lv.barrier_y * 8 };
+        }
         4 => {
             let sx = if px % 128 > 8 && px % 128 < 120 { (px / 128) * 128 + 64 } else { px };
             let sy = if py % 128 > 4 && py % 128 < 124 { (py / 128) * 128 + 64 } else { py };
-            (cx(sx - 64), cy(sy - 64))
+            tx = (sx - 64).min(wlim);
+            ty = (sy - 64).min(hlim);
         }
-        5 => (cx(px - 32), 0),
-        6 | 7 => (cx(px - 48), 0),
-        8 => (0, cy(py - 32)),
-        _ => (cx(px - 64), 0),
+        5 => {
+            tx = (px - 32).min(wlim);
+        }
+        6 => {
+            if px > 848 {
+                C_OFFSET = 48;
+            } else if px < 704 {
+                C_FLAG = false;
+                C_OFFSET = 32;
+            } else if px > 808 {
+                C_FLAG = true;
+                C_OFFSET = 96;
+            }
+            tx = (px - C_OFFSET).min(wlim);
+            if lv.barrier_x >= 0 {
+                camera_x_barrier(lv.barrier_x, px, &mut tx);
+            }
+            if C_FLAG {
+                tx = tx.max(672);
+            }
+        }
+        7 => {
+            if px > 420 {
+                if px < 436 {
+                    C_OFFSET = 32 + px - 420;
+                } else if px > 808 {
+                    C_OFFSET = 48 - (px - 808).min(16);
+                } else {
+                    C_OFFSET = 48;
+                }
+            } else {
+                C_OFFSET = 32;
+            }
+            tx = (px - C_OFFSET).max(0).min(wlim);
+        }
+        8 => {
+            tx = 0;
+            ty = (py - 32).max(0).min(hlim);
+        }
+        _ => {
+            tx = (px - 64).min(wlim);
+        }
     }
+    (tx, ty)
 }
 
 unsafe fn update_camera() {
@@ -1558,6 +1707,11 @@ unsafe fn goto_level(index: i32) {
     let idx = index.clamp(1, (LEVELS.len() - 1) as i32);
     LVL_INDEX = idx;
     let m = &LEVELS[idx as usize];
+    // Titled levels show a 60-frame intro card (doubled to 120 for 60fps).
+    LEVEL_INTRO = if m.title.is_empty() { 0 } else { 120 };
+    if idx == 2 {
+        psfx(17, 8, 16);
+    }
     LVL_W = m.width;
     LVL_H = m.height;
     CAM_MODE = m.camera_mode;
@@ -1589,6 +1743,11 @@ unsafe fn restart_level() {
     OBJ = [OBJ0; MAX_OBJ];
     PLAYER = NONE;
     CAM_X = 0;
+    CAM_Y = 0;
+    C_OFFSET = 0;
+    C_FLAG = false;
+    INFADE = 0; // restart the level-entry wipe
+    SFX_TIMER = 0;
     HAVE_GRAPPLE = LVL_INDEX > 2; // levels 1-2: pick the grapple up in-level
     FREEZE = 0;
     SHAKE = 0;
@@ -1626,23 +1785,76 @@ pub fn init() {
     unsafe {
         rng::srand(42);
         init_particles();
-        CUR_MUSIC = -1;
         FRAMES = 0;
-        goto_level(1);
+        TIMER_F = 0;
+        SECONDS = 0;
+        MINUTES = 0;
+        BERRY_COUNT = 0;
+        DEATH_COUNT = 0;
+        SHOW_SCORE = 0;
+        TITLE_FLASH = i32::MIN;
+        LEVEL_INTRO = 0;
+        INFADE = 60;
+        SHAKE = 0;
+        FREEZE = 0;
+        CAM_X = 0;
+        CAM_Y = 0;
+        // Start on the titlescreen (level 0); its music is shared with level 1.
+        LVL_INDEX = 0;
+        CUR_MUSIC = 38;
+        music(38);
     }
 }
 
 pub fn update() {
     unsafe {
-        FRAMES += 1;
+        FRAMES += 1; // time() wobble clock -- always advances
+
+        // titlescreen
+        if LVL_INDEX == 0 {
+            if TITLE_FLASH != i32::MIN {
+                TITLE_FLASH -= 1;
+                if TITLE_FLASH < -60 {
+                    goto_level(1);
+                }
+            } else if held(IN_JUMP) || held(IN_GRAPPLE) {
+                TITLE_FLASH = 100; // PICO-8 50 frames doubled for 60fps
+                sfx::play(22);
+            }
+            return;
+        }
+
+        // level intro card
+        if LEVEL_INTRO > 0 {
+            LEVEL_INTRO -= 1;
+            if LEVEL_INTRO == 0 {
+                psfx(17, 24, 9);
+            }
+            return;
+        }
+
+        // normal-level timers
         SFX_TIMER = (SFX_TIMER - 1).max(0);
+        if SHAKE > 0 {
+            SHAKE -= 1;
+        }
+        INFADE = (INFADE + 1).min(60);
+        if LVL_INDEX != 8 {
+            TIMER_F += 1;
+            if TIMER_F >= 60 {
+                TIMER_F = 0;
+                SECONDS += 1;
+            }
+            if SECONDS >= 60 {
+                SECONDS = 0;
+                MINUTES += 1;
+            }
+        }
+
         update_input();
         if FREEZE > 0 {
             FREEZE -= 1;
             return;
-        }
-        if SHAKE > 0 {
-            SHAKE -= 1;
         }
         // player first, then the rest (snapshot order)
         if PLAYER != NONE && OBJ[PLAYER].exists {
@@ -1666,35 +1878,319 @@ pub fn update() {
     }
 }
 
+/// Sparse-dithered background pillars (level.columns). The backend has no fillp,
+/// so approximate the dither with thin parallax-scrolled vertical streaks.
+unsafe fn draw_columns(lv: &LevelMeta) {
+    let par = CAM_X / 10; // camera_x * 0.1 parallax
+    let y1 = (lv.height * 8) as i16;
+    let mut x = 0;
+    while x < lv.width {
+        let tx = (x * 8 + par) as i16;
+        let w = ((x % 2) * 8 + 8) as i16;
+        let mut sx = tx;
+        while sx < tx + w {
+            backend::line(sx, 0, sx, y1, lv.columns);
+            sx += 4;
+        }
+        x += 1 + x % 7;
+    }
+}
+
 pub fn draw() {
     unsafe {
-        let shake_y = if SHAKE > 0 { -1 } else { 0 };
-        backend::camera(CAM_X as i16, (CAM_Y + shake_y) as i16);
-        draw_clouds(); // background
+        if LVL_INDEX == 0 {
+            draw_title();
+            return;
+        }
+        if LEVEL_INTRO > 0 {
+            draw_intro();
+            return;
+        }
+        let lv = level();
+
+        // camera with PICO-8's random both-axis shake
+        let (jx, jy) = if SHAKE > 0 {
+            (rng::rnd(fi(5)).to_int() - 2, rng::rnd(fi(5)).to_int() - 2)
+        } else {
+            (0, 0)
+        };
+        backend::camera((CAM_X + jx) as i16, (CAM_Y + jy) as i16);
+
+        // cls(level.bg): fill the playfield (plus a margin) with the bg colour
+        backend::rectfill((CAM_X - 20) as i16, (CAM_Y - 20) as i16, (CAM_X + 148) as i16, (CAM_Y + 148) as i16, lv.bg);
+
+        // background clouds in the level's colour
+        draw_clouds(fi(1), Fix32::ZERO, fi(1), lv.clouds, 26);
+
+        // background pillars
+        if lv.columns >= 0 {
+            draw_columns(lv);
+        }
+
+        // tilemap (base pass)
         let cam_col = CAM_X / 8;
         let cam_row = CAM_Y / 8;
         let cols = 18.min(LVL_W - cam_col);
         let rows = 18.min(LVL_H - cam_row);
         backend::map(cam_col, cam_row, (cam_col * 8) as i16, (cam_row * 8) as i16, cols, rows, 0);
+        // per-level palette swap: overdraw the flag-7 tiles with the swap applied
+        if lv.pal_id != 0 {
+            backend::flush(); // let the base tiles finish with the unswapped CLUT
+            apply_level_pal(lv.pal_id);
+            for y in cam_row..(cam_row + rows) {
+                for x in cam_col..(cam_col + cols) {
+                    let tile = tile_at(x, y);
+                    if tile != 0 && backend::fget(tile, 0) && backend::fget(tile, 7) {
+                        backend::spr(tile, (x * 8) as i16, (y * 8) as i16, false, false);
+                    }
+                }
+            }
+            backend::flush(); // finish the swapped tiles before resetting the CLUT
+            backend::pal_reset();
+        }
 
+        // score panel
+        if SHOW_SCORE > 105 {
+            draw_score();
+        }
+
+        // objects (player drawn last)
         for i in 0..MAX_OBJ {
             let o = OBJ[i];
-            if !o.exists || o.destroyed {
+            if !o.exists || o.destroyed || o.otype == ObjType::Player {
                 continue;
             }
-            if o.otype == ObjType::Player {
-                player_draw(i);
-            } else if o.spr.floor_int() >= 0 {
-                backend::spr(o.spr.floor_int(), o.x.to_int() as i16, o.y.to_int() as i16, o.flip_x, o.flip_y);
-            }
+            draw_object(i);
         }
-        draw_snow(); // foreground
+        if PLAYER != NONE && OBJ[PLAYER].exists {
+            player_draw(PLAYER);
+        }
+
+        // drifting snow
+        draw_snow();
+
+        // foreground fog, pinned to the level's bottom edge
+        if lv.fogmode != 0 {
+            draw_clouds(fx(1.25), fi(LVL_H * 8 + 1), Fix32::ZERO, 7, 16);
+        }
+
+        // screen wipes (level finish / entry)
+        draw_wipes();
+
+        // run timer HUD (hidden briefly during the entry fade)
+        if INFADE < 45 {
+            draw_time((CAM_X + 4) as i16, (CAM_Y + 4) as i16);
+        }
 
         // Cover the 32px screen margins each side (the 128px playfield is drawn 2x =
-        // 256 wide, centred in 320). Reset the camera first so the borders stay fixed
-        // to the screen instead of scrolling with the level.
+        // 256 wide, centred in 320). Reset the camera first so the borders stay fixed.
         backend::camera(0, 0);
         backend::rectfill(-20, -20, 1, 148, 0);
         backend::rectfill(127, -20, 148, 148, 0);
+    }
+}
+
+// ---- draw helpers ----
+
+/// `print` centred on `cx` (PICO-8 font is 4px/char).
+unsafe fn print_center(text: &[u8], cx: i16, y: i16, c: i32) {
+    let x = cx - (text.len() as i16 * 4 - 1) / 2;
+    backend::print(text, x, y, c);
+}
+
+/// Outline rectangle (the backend only has filled rects).
+unsafe fn rect_outline(x0: i16, y0: i16, x1: i16, y1: i16, c: i32) {
+    backend::line(x0, y0, x1, y0, c);
+    backend::line(x0, y1, x1, y1, c);
+    backend::line(x0, y0, x0, y1, c);
+    backend::line(x1, y0, x1, y1, c);
+}
+
+/// Two-digit decimal into `buf[0..2]`.
+fn two_digits(n: i32, buf: &mut [u8]) {
+    buf[0] = b'0' + ((n / 10) % 10) as u8;
+    buf[1] = b'0' + (n % 10) as u8;
+}
+
+/// `draw_time`: the HH:MM:SS run timer.
+unsafe fn draw_time(x: i16, y: i16) {
+    let m = MINUTES % 60;
+    let h = MINUTES / 60;
+    backend::rectfill(x, y, x + 32, y + 6, 0);
+    let mut buf = [b':'; 8];
+    two_digits(h, &mut buf[0..2]);
+    two_digits(m, &mut buf[3..5]);
+    two_digits(SECONDS, &mut buf[6..8]);
+    backend::print(&buf, x + 1, y + 1, 7);
+}
+
+/// A sprite bobbing on `sin(time())*2` (grapple pickup + uncollected berry).
+unsafe fn draw_bob(n: i32, x: i16, y: Fix32) {
+    if n < 0 {
+        return;
+    }
+    let bob = ((fi(FRAMES) / fi(60)).sin() * fi(2)).to_int() as i16;
+    backend::spr(n, x, y.to_int() as i16 + bob, true, false);
+}
+
+/// Per-object custom draw (snowball shadow, berry bob/popup, crumble crack, ...).
+unsafe fn draw_object(i: usize) {
+    let o = OBJ[i];
+    let n = o.spr.floor_int();
+    let x = o.x.to_int() as i16;
+    let y = o.y.to_int() as i16;
+    match o.otype {
+        ObjType::Snowball => {
+            if n < 0 {
+                return;
+            }
+            // 1px drop-shadow: the sprite with colour 7 -> 1, then the real sprite.
+            backend::flush();
+            backend::pal(7, 1);
+            backend::spr(n, x, y + 1, o.flip_x, o.flip_y);
+            backend::flush();
+            backend::pal_reset();
+            backend::spr(n, x, y, o.flip_x, o.flip_y);
+        }
+        ObjType::GrapplePickup => draw_bob(n, x, o.y),
+        ObjType::Berry => {
+            if !o.stop {
+                draw_bob(n, x, o.y); // bobbing berry (flash ring omitted: needs a per-obj field)
+            } else {
+                // "1000" score popup, floating up, blinking 7/14 over an 8 shadow
+                let c = if o.timer % 4 < 2 { 7 } else { 14 };
+                backend::print(b"1000", x - 4, y + 1, 8);
+                backend::print(b"1000", x - 4, y, c);
+            }
+        }
+        ObjType::Crumble => {
+            if n >= 0 {
+                backend::spr(n, x, y, o.flip_x, o.flip_y);
+            }
+            // "about to break" crack: PICO-8 dithers the tile; approximate with a
+            // coarse colour-1 checker (timer 2 doubled to 4 for 60fps).
+            if o.breaking && o.timer > 4 {
+                let mut dy = 0i16;
+                while dy < 8 {
+                    let mut dx = ((dy / 2) % 2) * 2;
+                    while dx < 8 {
+                        backend::rectfill(x + dx, y + dy, x + dx + 1, y + dy + 1, 1);
+                        dx += 4;
+                    }
+                    dy += 2;
+                }
+            }
+        }
+        _ => {
+            if n >= 0 {
+                backend::spr(n, x, y, o.flip_x, o.flip_y);
+            }
+        }
+    }
+}
+
+/// Titlescreen (level_index 0): logo, border, credits, snow, flash transition.
+unsafe fn draw_title() {
+    backend::camera(0, 0);
+    backend::rectfill(-20, -20, 148, 148, 0); // cls(0)
+
+    // flash transition: remap the whole palette to a flat colour as we strobe out
+    let flashing = TITLE_FLASH != i32::MIN;
+    let mut swapped = false;
+    if flashing {
+        let c = if TITLE_FLASH > 20 {
+            if TITLE_FLASH % 20 < 10 { 7 } else { 10 }
+        } else if TITLE_FLASH > 10 {
+            2
+        } else if TITLE_FLASH > 0 {
+            1
+        } else {
+            0
+        };
+        if c < 10 {
+            backend::flush();
+            for k in 1..=15 {
+                backend::pal(k, c);
+            }
+            swapped = true;
+        }
+    }
+
+    // logo: sspr(64,32, 64,32, 36,32) -> the 8x4 sprite block at sheet (col 8,row 4)
+    for ty in 0..4 {
+        for tx in 0..8 {
+            let nn = (4 + ty) * 16 + (8 + tx);
+            backend::spr(nn, (36 + tx * 8) as i16, (32 + ty * 8) as i16, false, false);
+        }
+    }
+    rect_outline(0, 0, 127, 127, 7);
+    print_center(b"lANI'S tREK", 64, 68, 14);
+    print_center(b"a game by", 64, 80, 1);
+    print_center(b"maddy thorson", 64, 87, 5);
+    print_center(b"noel berry", 64, 94, 5);
+    print_center(b"lena raine", 64, 101, 5);
+    draw_snow();
+
+    if swapped {
+        backend::flush();
+        backend::pal_reset();
+    }
+}
+
+/// Level intro card (level_intro > 0): "level N" + the level title.
+unsafe fn draw_intro() {
+    backend::camera(0, 0);
+    backend::rectfill(-20, -20, 148, 148, 0); // cls(0)
+    draw_time(4, 4);
+    if LVL_INDEX != 8 {
+        let mut buf = [0u8; 8];
+        let pre = b"level ";
+        buf[..6].copy_from_slice(pre);
+        two_digits(LVL_INDEX - 2, &mut buf[6..8]);
+        // drop a leading zero for single-digit level numbers
+        if buf[6] == b'0' {
+            print_center(&[buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[7]], 64, 64 - 8, 7);
+        } else {
+            print_center(&buf, 64, 64 - 8, 7);
+        }
+    }
+    print_center(level().title.as_bytes(), 64, 64, 7);
+}
+
+/// End-of-game score panel (berries / time / deaths).
+unsafe fn draw_score() {
+    backend::rectfill(34, 392, 98, 434, 1);
+    backend::rectfill(32, 390, 96, 432, 0);
+    rect_outline(32, 390, 96, 432, 7);
+    backend::spr(21, 44, 396, false, false);
+    let mut bn = [b'X', b' ', 0, 0];
+    two_digits(BERRY_COUNT, &mut bn[2..4]);
+    backend::print(&bn, 56, 398, 7);
+    backend::spr(87, 44, 408, false, false);
+    draw_time(56, 408);
+    backend::spr(71, 44, 420, false, false);
+    let mut dn = [b'X', b' ', 0, 0];
+    two_digits(DEATH_COUNT, &mut dn[2..4]);
+    backend::print(&dn, 56, 421, 7);
+}
+
+/// Wavy screen wipes: out-wipe on level finish, in-wipe (infade) on entry.
+unsafe fn draw_wipes() {
+    let wave = |i: i32, e: Fix32| -> i32 {
+        (fi(191) * e - fi(32) + (fi(i) * fx(0.2)).sin() * fi(16) + fi(127 - i) * fx(0.25)).to_int()
+    };
+    if PLAYER != NONE && OBJ[PLAYER].exists && OBJ[PLAYER].wipe_timer > 5 {
+        let e = fi(OBJ[PLAYER].wipe_timer - 5) / fi(12);
+        for i in 0..128 {
+            let s = wave(i, e);
+            backend::rectfill(CAM_X as i16, (CAM_Y + i) as i16, (CAM_X + s) as i16, (CAM_Y + i) as i16, 0);
+        }
+    }
+    if INFADE < 15 {
+        let e = fi(INFADE) / fi(12);
+        for i in 0..128 {
+            let s = wave(i, e);
+            backend::rectfill((CAM_X + s) as i16, (CAM_Y + i) as i16, (CAM_X + 128) as i16, (CAM_Y + i) as i16, 0);
+        }
     }
 }
