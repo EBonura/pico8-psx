@@ -17,6 +17,15 @@ pub struct AudioData {
     pub waveform_adpcm: &'static [u8],
     /// Byte offset of each of the 8 waveforms within `waveform_adpcm`.
     pub waveform_offset: &'static [u16; 8],
+    /// LONG (448-sample, ADPCM-prediction) versions of the 7 tonal waveforms, used
+    /// for LOW notes to kill short-wavetable imaging: the 8x replay rate pushes the
+    /// SPU's interpolation images above the audible band, and prediction encoding
+    /// keeps the (replay-rate-scaled) 4-bit quantization noise ~30dB lower than the
+    /// short tables' filter-0. Played at `spu_pitch_table[key] << 3`.
+    pub waveform_adpcm_long: &'static [u8],
+    /// Byte offset of each waveform within `waveform_adpcm_long` (index 6 = noise
+    /// is a dummy; noise never uses the long path).
+    pub waveform_offset_long: &'static [u16; 8],
     /// Per-SFX metadata: `[speed, loop_start, loop_end, _]`.
     pub sfx_meta: &'static [[u8; 4]],
     /// Per-SFX 32 note words (pitch|instr|vol|effect bit-packed).
@@ -32,6 +41,8 @@ pub struct AudioData {
 const EMPTY_AUDIO: AudioData = AudioData {
     waveform_adpcm: &[],
     waveform_offset: &[0; 8],
+    waveform_adpcm_long: &[],
+    waveform_offset_long: &[0; 8],
     sfx_meta: &[],
     sfx_notes: &[],
     spu_pitch_table: &[0; 64],
@@ -40,6 +51,12 @@ const EMPTY_AUDIO: AudioData = AudioData {
 };
 
 const SPU_WAVEFORM_BASE: u32 = 0x1000;
+/// The long (448-sample) wavetables sit just past the 352-byte short tables.
+const SPU_WAVEFORM_LONG_BASE: u32 = 0x1200;
+/// Tonal notes with key below this use the LONG (8x) wavetable to suppress
+/// short-wavetable imaging; at/above it the short table is used (imaging is already
+/// out of band, and the long table's SPU pitch would pass the 0x3FFF ceiling).
+const LONG_WT_MAX_KEY: i32 = 30;
 const NUM_SFX_VOICES: usize = 4;
 const SFX_VOICE_BASE: usize = 4;
 // The phaser (instrument 7) is two triangles a hair apart that beat. We can't do
@@ -139,6 +156,7 @@ struct Channel {
     custom_tick: i32, // tick within the custom SFX
     note_pitch: i32,  // the main note's pitch (custom pitch is relative to this)
     note_vol: i32,    // the main note's volume 0..7 (scales the custom envelope)
+    long_wt: bool,    // this voice loaded the long (8x) wavetable -> pitches use << 3
 }
 const CH0: Channel = Channel {
     sfx_id: -1,
@@ -153,6 +171,7 @@ const CH0: Channel = Channel {
     custom_tick: 0,
     note_pitch: 0,
     note_vol: 0,
+    long_wt: false,
 };
 
 static mut AUDIO: AudioData = EMPTY_AUDIO;
@@ -170,6 +189,38 @@ static mut SFX_NEXT_VOICE: usize = 0;
 /// per-instrument isolation harness to solo bass/lead/drums. 0 = normal playback.
 static mut MUSIC_MUTE: u8 = 0;
 static mut WAVEFORM_ADDR: [u32; 8] = [0; 8]; // byte addresses in SPU RAM
+static mut WAVEFORM_ADDR_LONG: [u32; 8] = [0; 8]; // long (8x) tonal wavetables
+
+/// Should a tonal note at `key` use the long (8x) wavetable? Noise (instr 6) never
+/// does. Decided when a voice's start address is set, then cached in
+/// `Channel::long_wt` so pitch bends stay consistent with the loaded sample.
+#[inline]
+fn uses_long(key: i32, instr: i32) -> bool {
+    instr != 6 && key < LONG_WT_MAX_KEY
+}
+
+/// SPU pitch for a voice: the long table is 8x the short table (448 vs 56 samples)
+/// so for the same note it replays 8x faster -- its pitch is the short pitch << 3.
+/// 8x is needed to push the SPU's replay images above the audible band.
+#[inline]
+fn scaled_pitch(p: u16, long: bool) -> u16 {
+    if long {
+        (p << 3).min(0x3FFF)
+    } else {
+        p
+    }
+}
+
+/// Start address of waveform `instr`'s short or long table.
+#[inline]
+unsafe fn wt_addr(instr: i32, long: bool) -> u32 {
+    let i = (instr & 7) as usize;
+    if long {
+        WAVEFORM_ADDR_LONG[i]
+    } else {
+        WAVEFORM_ADDR[i]
+    }
+}
 
 // ---- note decode ----
 #[inline]
@@ -233,7 +284,11 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
     // e.g. celeste2's tilt bass (sfx2, note0 0) played two octaves too high.
     let played = (custom_outer_key(v) + sfx_pitch(cnote) - 24).clamp(0, 63);
     let spu_vol = (VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7) as i16;
-    let spu_pitch = get_pitch(played, cwave);
+    // Low custom notes (e.g. the tilt bass) use the long wavetable too; the decision
+    // tracks `played` and is cached so custom_modulate's bends stay consistent.
+    let long = uses_long(played, cwave);
+    CHANNELS[v].long_wt = long;
+    let spu_pitch = scaled_pitch(get_pitch(played, cwave), long);
     let voice = Voice::new(v as u8);
     if keyon {
         set_voice_noise(v, cwave == 6);
@@ -248,7 +303,7 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
         // the lead) was playing that corrupt wavetable, dumping a huge 80-320Hz
         // rumble (~15x PICO-8) onto the lead. Play the triangle base here too.
         let wav_idx = if cwave == 7 { 0 } else { cwave & 7 };
-        voice.set_start_addr(SpuAddr::new(WAVEFORM_ADDR[wav_idx as usize]));
+        voice.set_start_addr(SpuAddr::new(wt_addr(wav_idx, long)));
         Voice::key_on(1 << v);
         CHANNELS[v].keyed_on = true;
     } else {
@@ -329,7 +384,8 @@ unsafe fn custom_modulate(v: usize) {
         if cwave == 6 {
             set_noise_freq(played);
         } else {
-            let base_pitch = get_pitch(played, cwave) as i32;
+            // Scale to the table the voice loaded (custom_set_voice cached long_wt).
+            let base_pitch = scaled_pitch(get_pitch(played, cwave), ch.long_wt) as i32;
             let mut m = 0;
             if in_eff == 2 || out_eff == 2 {
                 CHANNELS[v].vibrato_phase += 16;
@@ -445,8 +501,11 @@ unsafe fn start_channel_note(v: usize) {
     } else {
         VOL_TABLE[vol as usize] as i16
     };
-    let spu_pitch = get_pitch(sfx_pitch(note), instr);
-    let addr = WAVEFORM_ADDR[(instr & 7) as usize];
+    let key = sfx_pitch(note);
+    let long = uses_long(key, instr);
+    CHANNELS[v].long_wt = long;
+    let spu_pitch = scaled_pitch(get_pitch(key, instr), long);
+    let addr = wt_addr(instr, long);
     voice_key_off(v);
     // Instrument 6 = hardware LFSR noise (real hiss); all others = sample voice.
     set_voice_noise(v, instr == 6);
@@ -459,7 +518,7 @@ unsafe fn start_channel_note(v: usize) {
         // PICO-8's phaser is triangle-like (fundamental + odd harmonics) with the
         // two oscillators beating; a single static wavetable can't sweep, so we
         // key a detuned triangle buddy alongside the primary triangle.
-        let tri = WAVEFORM_ADDR[0];
+        let tri = wt_addr(0, long);
         let va = (spu_vol as i32 * 2 / 3) as i16;
         let vb = (spu_vol as i32 / 3) as i16;
         voice.set_volume(Volume(va), Volume(va));
@@ -554,7 +613,8 @@ unsafe fn apply_effects(v: usize) {
         _ => {}
     }
     if let Some(p) = set_pitch {
-        let p = p.clamp(1, 0x3FFF);
+        // set_pitch is in short-table units; scale to the table this voice loaded.
+        let p = scaled_pitch(p.clamp(1, 0x3FFF) as u16, ch.long_wt).min(0x3FFF) as i32;
         voice.set_pitch(Pitch::raw(p as u16));
         if phaser {
             Voice::new((v + PHASER_BUDDY) as u8)
@@ -682,6 +742,12 @@ pub fn init(audio: AudioData) {
         spu::upload_adpcm(SpuAddr::new(SPU_WAVEFORM_BASE), audio.waveform_adpcm);
         for w in 0..8 {
             WAVEFORM_ADDR[w] = SPU_WAVEFORM_BASE + audio.waveform_offset[w] as u32;
+        }
+        if !audio.waveform_adpcm_long.is_empty() {
+            spu::upload_adpcm(SpuAddr::new(SPU_WAVEFORM_LONG_BASE), audio.waveform_adpcm_long);
+            for w in 0..8 {
+                WAVEFORM_ADDR_LONG[w] = SPU_WAVEFORM_LONG_BASE + audio.waveform_offset_long[w] as u32;
+            }
         }
         CHANNELS = [CH0; 8];
         MUSIC_PATTERN = -1;

@@ -18,7 +18,8 @@ pub mod assets;
 mod game;
 
 use assets::audio_data::{
-    MUSIC_PATTERNS, SFX_META, SFX_NOTES, SPU_PITCH_TABLE, WAVEFORM_ADPCM, WAVEFORM_OFFSET,
+    MUSIC_PATTERNS, SFX_META, SFX_NOTES, SPU_PITCH_TABLE, WAVEFORM_ADPCM, WAVEFORM_ADPCM_LONG,
+    WAVEFORM_OFFSET, WAVEFORM_OFFSET_LONG,
 };
 use assets::gfx::GFX_DATA;
 use assets::tilemap::{MAP_W, TILEMAP_DATA, TILE_FLAGS};
@@ -39,6 +40,8 @@ const CART: Cart = Cart {
 const AUDIO: AudioData = AudioData {
     waveform_adpcm: &WAVEFORM_ADPCM,
     waveform_offset: &WAVEFORM_OFFSET,
+    waveform_adpcm_long: &WAVEFORM_ADPCM_LONG,
+    waveform_offset_long: &WAVEFORM_OFFSET_LONG,
     sfx_meta: &SFX_META,
     sfx_notes: &SFX_NOTES,
     spu_pitch_table: &SPU_PITCH_TABLE,
