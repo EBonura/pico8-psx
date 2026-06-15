@@ -242,7 +242,13 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
         }
         voice.set_volume(Volume(spu_vol), Volume(spu_vol));
         voice.set_pitch(Pitch::raw(spu_pitch));
-        voice.set_start_addr(SpuAddr::new(WAVEFORM_ADDR[(cwave & 7) as usize]));
+        // The phaser (instr 7) wavetable is corrupt (phaser isn't periodic at the
+        // base period) -- the DIRECT phaser plays a triangle + detuned buddy instead.
+        // A custom instrument whose inner waveform is the phaser (celeste2 sfx1 = w9,
+        // the lead) was playing that corrupt wavetable, dumping a huge 80-320Hz
+        // rumble (~15x PICO-8) onto the lead. Play the triangle base here too.
+        let wav_idx = if cwave == 7 { 0 } else { cwave & 7 };
+        voice.set_start_addr(SpuAddr::new(WAVEFORM_ADDR[wav_idx as usize]));
         Voice::key_on(1 << v);
         CHANNELS[v].keyed_on = true;
     } else {
