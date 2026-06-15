@@ -1066,13 +1066,18 @@ unsafe fn player_update(i: usize) {
             OBJ[i].spd.y = (OBJ[i].spd.y + fx(0.4)).min(fx(4.5));
             OBJ[i].spd.x = approach(OBJ[i].spd.x, Fix32::ZERO, fx(0.1));
             if on_ground {
+                // PICO-8 cues at 30fps frames 0/61/70/80; doubled for 60fps so the
+                // "got the grapple" jingle plays in full before the level music resumes.
                 if OBJ[i].t_grapple_pickup == 0 {
                     music(39);
                 }
-                if OBJ[i].t_grapple_pickup == 70 {
+                if OBJ[i].t_grapple_pickup == 122 {
+                    music(-1);
+                }
+                if OBJ[i].t_grapple_pickup == 140 {
                     music(22);
                 }
-                if OBJ[i].t_grapple_pickup > 80 {
+                if OBJ[i].t_grapple_pickup > 160 {
                     OBJ[i].state = 0;
                 }
                 OBJ[i].t_grapple_pickup += 1;
@@ -1174,7 +1179,9 @@ unsafe fn player_update(i: usize) {
     }
 
     // sprite
-    if OBJ[i].state != 11 {
+    if OBJ[i].state == 50 && OBJ[i].t_grapple_pickup > 0 {
+        OBJ[i].spr = fi(5); // raising the grapple overhead
+    } else if OBJ[i].state != 11 {
         if !on_ground {
             OBJ[i].spr = fi(3);
         } else if INPUT_X != 0 {
@@ -1323,14 +1330,32 @@ unsafe fn player_draw(i: usize) {
         last = s;
     }
 
-    // grapple rope (simple two-tone line)
+    // grapple rope (active grapple: straight taut line)
     if o.state >= 10 && o.state <= 12 {
         backend::line(o.x.to_int() as i16, (o.y - fi(3)).to_int() as i16, o.grapple_x.to_int() as i16, (o.grapple_y).to_int() as i16, 7);
     }
+    // retracting grapple: dark underline (1) then white rope (7), as in the original
     if o.grapple_retract {
-        backend::line(o.x.to_int() as i16, (o.y - fi(2)).to_int() as i16, o.grapple_x.to_int() as i16, (o.grapple_y + fi(1)).to_int() as i16, 7);
+        backend::line(o.x.to_int() as i16, (o.y - fi(2)).to_int() as i16, o.grapple_x.to_int() as i16, (o.grapple_y + fi(1)).to_int() as i16, 1);
+        backend::line(o.x.to_int() as i16, (o.y - fi(3)).to_int() as i16, o.grapple_x.to_int() as i16, (o.grapple_y).to_int() as i16, 7);
     }
     backend::spr(o.spr.floor_int(), (o.x - fi(4)).to_int() as i16, (o.y - fi(8)).to_int() as i16, o.facing != 1, false);
+
+    // grapple-pickup celebration: the hookshot raised overhead + a spinning star burst
+    if o.state == 50 && o.t_grapple_pickup > 0 {
+        backend::spr(20, (o.x - fi(4)).to_int() as i16, (o.y - fi(18)).to_int() as i16, false, false);
+        let ty = o.y - fi(14);
+        for k in 0..=16 {
+            let ang = t * fi(4) + fi(k) / fi(16);
+            let s = ang.sin();
+            let c = ang.cos();
+            let x0 = (o.x + s * fi(16)).to_int() as i16;
+            let y0 = (ty + c * fi(16)).to_int() as i16;
+            let x1 = (o.x + s * fi(40)).to_int() as i16;
+            let y1 = (ty + c * fi(40)).to_int() as i16;
+            backend::line(x0, y0, x1, y1, 7);
+        }
+    }
 }
 
 // ====================================================================
@@ -1664,5 +1689,12 @@ pub fn draw() {
             }
         }
         draw_snow(); // foreground
+
+        // Cover the 32px screen margins each side (the 128px playfield is drawn 2x =
+        // 256 wide, centred in 320). Reset the camera first so the borders stay fixed
+        // to the screen instead of scrolling with the level.
+        backend::camera(0, 0);
+        backend::rectfill(-20, -20, 1, 148, 0);
+        backend::rectfill(127, -20, 148, 148, 0);
     }
 }
