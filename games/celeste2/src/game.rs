@@ -238,6 +238,7 @@ struct Obj {
     t_grapple_pickup: i32,
     wipe_timer: i32,
     oid: i32, // spawn id = level*100 + tx + ty*128 (checkpoint/berry persistence)
+    flash: i32, // berry pickup flash-ring timer
 }
 
 const NONE: usize = usize::MAX;
@@ -292,6 +293,7 @@ const OBJ0: Obj = Obj {
     t_grapple_pickup: 0,
     wipe_timer: 0,
     oid: -1,
+    flash: 0,
 };
 
 const MAX_OBJ: usize = 48;
@@ -300,6 +302,8 @@ static mut PLAYER: usize = NONE;
 static mut HAVE_GRAPPLE: bool = false;
 // Active checkpoint oid (-1 = none); reset per level. The player respawns here.
 static mut LEVEL_CHECKPOINT: i32 = -1;
+// Slot of the most-recently-grabbed berry, so grabbing a new one deposits the old.
+static mut LAST_BERRY: usize = NONE;
 // Deposited-berry oids for the whole run, so collected berries don't respawn or
 // re-count on a level restart/re-entry.
 static mut COLLECTED: [i32; 32] = [-1; 32];
@@ -1293,6 +1297,8 @@ unsafe fn player_update(i: usize) {
                 if overlaps(i, j, Fix32::ZERO, Fix32::ZERO) && OBJ[j].link == NONE && OBJ[j].timer == 0 && !OBJ[j].stop {
                     OBJ[j].link = i; // collected -> follow player
                     OBJ[j].timer = 0;
+                    OBJ[j].flash = 5; // pickup flash ring
+                    LAST_BERRY = j; // grabbing this deposits any older carried berry
                     psfx(7, 12, 4);
                 }
             }
@@ -1607,13 +1613,15 @@ unsafe fn obj_update(i: usize) {
                 // per-frame approach is halved for 60fps (PICO-8 ran this at 30)
                 OBJ[i].x += (OBJ[p].x - OBJ[i].x) / fi(8) * HALF;
                 OBJ[i].y += (OBJ[p].y - fi(4) - OBJ[i].y) / fi(8) * HALF;
+                OBJ[i].flash -= 1;
                 let grounded = check_solid(p, Fix32::ZERO, fi(1)) && OBJ[p].state != 99;
                 if grounded {
                     OBJ[i].timer += 1;
                 } else {
                     OBJ[i].timer = 0;
                 }
-                if OBJ[i].timer > 6 || OBJ[p].x > fi(LVL_W * 8 - 7) {
+                // deposit when settled, at the level edge, or when a newer berry was grabbed
+                if OBJ[i].timer > 6 || OBJ[p].x > fi(LVL_W * 8 - 7) || LAST_BERRY != i {
                     psfx_lock(8, 8, 8, 40);
                     OBJ[i].stop = true;
                     OBJ[i].timer = 0;
@@ -1794,6 +1802,7 @@ unsafe fn next_level() {
 unsafe fn restart_level() {
     OBJ = [OBJ0; MAX_OBJ];
     PLAYER = NONE;
+    LAST_BERRY = NONE;
     CAM_X = 0;
     CAM_Y = 0;
     C_OFFSET = 0;
@@ -2122,12 +2131,34 @@ unsafe fn draw_object(i: usize) {
         ObjType::GrapplePickup => draw_bob(n, x, o.y),
         ObjType::Berry => {
             if !o.stop {
-                draw_bob(n, x, o.y); // bobbing berry (flash ring omitted: needs a per-obj field)
+                draw_bob(n, x, o.y); // bobbing berry
+                if o.flash > 0 {
+                    // pickup flash: expanding white ring + a solid flash over the berry
+                    backend::circ(x + 4, y + 4, (o.flash * 3) as i16, 7);
+                    backend::circfill(x + 4, y + 4, 5, 7);
+                }
             } else {
                 // "1000" score popup, floating up, blinking 7/14 over an 8 shadow
                 let c = if o.timer % 4 < 2 { 7 } else { 14 };
                 backend::print(b"1000", x - 4, y + 1, 8);
                 backend::print(b"1000", x - 4, y, c);
+            }
+        }
+        ObjType::Checkpoint => {
+            if LEVEL_CHECKPOINT == o.oid {
+                // active checkpoint: recolour the flag (2->11) + a gentle wave. (The
+                // original waves it per pixel-column via sspr; the backend's
+                // textured-quad path garbles 1px-wide sub-sprites, so the whole flag
+                // is animated instead.)
+                let t = fi(FRAMES) / fi(60);
+                let wob = ((-(t * fi(2))).sin() * fi(1)).to_int() as i16;
+                backend::flush();
+                backend::pal(2, 11);
+                backend::spr(13, x, y + wob, false, false);
+                backend::flush();
+                backend::pal_reset();
+            } else if n >= 0 {
+                backend::spr(n, x, y, o.flip_x, o.flip_y);
             }
         }
         ObjType::Crumble => {

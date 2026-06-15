@@ -248,6 +248,36 @@ pub fn circfill(cx: i16, cy: i16, radius: i16, c: i32) {
     }
 }
 
+/// PICO-8 `circ(x,y,r,c)` -- 1px outline (midpoint circle), each point a 2x2
+/// screen dot. Used for the berry pickup flash ring.
+pub fn circ(cx: i16, cy: i16, radius: i16, c: i32) {
+    if radius < 0 {
+        return;
+    }
+    let (r, g, b) = rgb(c);
+    let dot = |x: i16, y: i16| {
+        let x0 = sx(x);
+        let y0 = sy(y);
+        gpu::draw_quad_flat([(x0, y0), (x0 + 2, y0), (x0, y0 + 2), (x0 + 2, y0 + 2)], r, g, b);
+    };
+    let mut x = radius as i32;
+    let mut y = 0i32;
+    let mut err = 0i32;
+    while x >= y {
+        for (ox, oy) in [(x, y), (y, x), (-x, y), (-y, x), (x, -y), (y, -x), (-x, -y), (-y, -x)] {
+            dot(cx + ox as i16, cy + oy as i16);
+        }
+        y += 1;
+        if err <= 0 {
+            err += 2 * y + 1;
+        }
+        if err > 0 {
+            x -= 1;
+            err -= 2 * x + 1;
+        }
+    }
+}
+
 // --------------------------------------------------------------------
 // Text
 // --------------------------------------------------------------------
