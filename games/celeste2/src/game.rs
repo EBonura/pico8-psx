@@ -2109,6 +2109,47 @@ unsafe fn draw_bob(n: i32, x: i16, y: Fix32) {
     backend::spr(n, x, y.to_int() as i16 + bob, true, false);
 }
 
+/// Sprite 13 (the checkpoint flag) as 8x8 PICO-8 palette indices, [row][col];
+/// 0 = transparent. Column 0 is the pole (colour 4); columns 1-7 rows 0-3 are the
+/// flag fabric (colour 2).
+const FLAG13: [[u8; 8]; 8] = [
+    [4, 2, 2, 2, 2, 2, 2, 2],
+    [4, 2, 2, 2, 2, 2, 2, 2],
+    [4, 2, 2, 2, 2, 2, 2, 2],
+    [4, 2, 2, 2, 2, 2, 2, 2],
+    [2, 0, 0, 0, 0, 0, 0, 0],
+    [4, 0, 0, 0, 0, 0, 0, 0],
+    [4, 0, 0, 0, 0, 0, 0, 0],
+    [4, 0, 0, 0, 0, 0, 0, 0],
+];
+
+/// Active-checkpoint waving flag, an ad-hoc pixel replica of the PICO-8 sspr
+/// effect: column 0 (the pole) is static; columns 1-7 (the fabric) are recoloured
+/// 2->11 and offset per-column by `sin(-time()*2 + col*0.25) * (col-1)*0.2`, so the
+/// free end ripples more than the pole side. Drawn pixel-by-pixel via rectfill.
+unsafe fn draw_active_flag(x: i16, y: i16) {
+    let t = fi(FRAMES) / fi(60);
+    for col in 0..8i32 {
+        let off = if col == 0 {
+            0
+        } else {
+            ((-(t * fi(2)) + fi(col) * fx(0.25)).sin() * fi(col - 1) * fx(0.2)).to_int()
+        } as i16;
+        for row in 0..8usize {
+            let mut c = FLAG13[row][col as usize] as i32;
+            if c == 0 {
+                continue; // transparent
+            }
+            if col > 0 && c == 2 {
+                c = 11; // pal(2,11) on the fabric columns only
+            }
+            let px = x + col as i16;
+            let py = y + off + row as i16;
+            backend::rectfill(px, py, px, py, c);
+        }
+    }
+}
+
 /// Per-object custom draw (snowball shadow, berry bob/popup, crumble crack, ...).
 unsafe fn draw_object(i: usize) {
     let o = OBJ[i];
@@ -2146,17 +2187,7 @@ unsafe fn draw_object(i: usize) {
         }
         ObjType::Checkpoint => {
             if LEVEL_CHECKPOINT == o.oid {
-                // active checkpoint: recolour the flag (2->11) + a gentle wave. (The
-                // original waves it per pixel-column via sspr; the backend's
-                // textured-quad path garbles 1px-wide sub-sprites, so the whole flag
-                // is animated instead.)
-                let t = fi(FRAMES) / fi(60);
-                let wob = ((-(t * fi(2))).sin() * fi(1)).to_int() as i16;
-                backend::flush();
-                backend::pal(2, 11);
-                backend::spr(13, x, y + wob, false, false);
-                backend::flush();
-                backend::pal_reset();
+                draw_active_flag(x, y); // per-column waving flag (ad-hoc sspr replica)
             } else if n >= 0 {
                 backend::spr(n, x, y, o.flip_x, o.flip_y);
             }
