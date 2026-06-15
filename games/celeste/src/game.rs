@@ -840,6 +840,7 @@ unsafe fn player_draw(this: *mut Obj) {
     set_hair_color((*this).djump);
     draw_hair(this, if (*this).flip_x { -1 } else { 1 });
     p8spr((*this).spr.to_int(), (*this).x.to_int(), (*this).y.to_int(), (*this).flip_x, (*this).flip_y);
+    backend::flush(); // draw the player with the hair palette before resetting it
     unset_hair_color();
 }
 
@@ -1836,6 +1837,13 @@ pub fn draw() {
         p8rectfill(-5, -5, 133, -1, 0);
         p8rectfill(-5, 128, 133, 133, 0);
         p8rectfill(128, -5, 133, 133, 0);
+
+        // The 128x128 PICO-8 image is drawn 2x (256 wide) and centred in 320, so
+        // there's a 32px black margin each side; clouds/particles spill into it.
+        // Cover the full side margins with black (a couple px into the play area
+        // so screenshake can't reveal a gap).
+        p8rectfill(-20, -20, 1, 148, 0);
+        p8rectfill(127, -20, 148, 148, 0);
 
         if is_title() {
             p8print(b"x+c", 58, 80, 5);

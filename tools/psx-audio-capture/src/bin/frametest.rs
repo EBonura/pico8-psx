@@ -76,12 +76,24 @@ fn main() {
     let mut fps_window_frames = 0u64;
     let press_started_at = if press_at >= 0 { press_at as u32 } else { 0 };
 
+    // --hold-from MASK@FRAME: hold MASK from FRAME to the end (e.g. dash = 0x2020).
+    let (hold2_mask, hold2_from) = arg("--hold-from")
+        .and_then(|s| {
+            let (m, f) = s.split_once('@')?;
+            let m = u16::from_str_radix(m.trim().trim_start_matches("0x"), 16).ok()?;
+            Some((m, f.trim().parse::<i64>().ok()?))
+        })
+        .unwrap_or((0, -1));
+
     let mut steps = 0u64;
     for frame in 0..frames {
         // Decide this frame's held buttons.
         let mut mask = hold;
         if press_at >= 0 && frame as i64 >= press_at && frame as i64 <= press_at + 24 {
             mask |= press_mask; // hold the start press ~0.4s then release
+        }
+        if hold2_from >= 0 && frame as i64 >= hold2_from {
+            mask |= hold2_mask;
         }
         bus.set_port1_buttons(ButtonState::from_bits(mask));
 

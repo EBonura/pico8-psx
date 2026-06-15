@@ -272,11 +272,33 @@ pub fn camera(x: i16, y: i16) {
     }
 }
 
+/// Re-upload the sprite CLUT so textured draws (spr/map) honour the current
+/// `pal()` remap -- entry i = the palette colour PAL[i] points at. circfill/
+/// rectfill already remap via PAL directly; sprites read this CLUT, so e.g.
+/// Madeline's hair (colour 8) only turns blue on dash once this is in sync.
+fn sync_sprite_clut() {
+    let mut c = [0u16; 16];
+    let mut i = 0usize;
+    while i < 16 {
+        c[i] = PICO8_CLUT[(unsafe { PAL[i] } as usize) & 15];
+        i += 1;
+    }
+    upload_16bpp(VramRect::new(SPRITE_CLUT.x(), SPRITE_CLUT.y(), 16, 1), &c);
+}
+
+/// Wait for the GPU to finish the queued draws. Call before a palette change
+/// that must not retro-actively affect already-issued sprite draws (the sprite
+/// CLUT is shared VRAM, so an unset/reset would otherwise recolour them).
+pub fn flush() {
+    gpu::draw_sync();
+}
+
 /// PICO-8 `pal(a,b)` -- remap draw colour `a` to `b`.
 pub fn pal(a: i32, b: i32) {
     unsafe {
         PAL[(a as usize) & 15] = (b & 15) as u8;
     }
+    sync_sprite_clut();
 }
 
 /// PICO-8 `pal()` -- reset the colour remap.
@@ -288,4 +310,5 @@ pub fn pal_reset() {
             i += 1;
         }
     }
+    sync_sprite_clut();
 }
