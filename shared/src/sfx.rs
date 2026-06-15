@@ -161,6 +161,10 @@ static mut MUSIC_LOOP: i32 = -1;
 static mut MUSIC_TICK: i32 = 0; // ticks elapsed in the current pattern
 static mut MUSIC_LEN: i32 = 0; // total ticks for the current pattern
 static mut SFX_NEXT_VOICE: usize = 0;
+/// Debug/test only: bit c set => music channel c (voices 0..4) is silenced each
+/// frame (it still sequences, so the others stay in time). Used by the
+/// per-instrument isolation harness to solo bass/lead/drums. 0 = normal playback.
+static mut MUSIC_MUTE: u8 = 0;
 static mut WAVEFORM_ADDR: [u32; 8] = [0; 8]; // byte addresses in SPU RAM
 
 // ---- note decode ----
@@ -218,8 +222,12 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
         return;
     }
     let cwave = sfx_instr(cnote);
-    let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
-    let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
+    // PICO-8 custom instruments transpose around C2 (pitch 24), NOT the instrument
+    // SFX's own first note: played_freq = inner_freq * outer_freq/freq(24), i.e.
+    // played_key = inner_key + (outer_key - 24) (zepto8 sfx.cpp). Using note0 as the
+    // reference put any instrument whose note0 != 24 off by (note0-24) semitones --
+    // e.g. celeste2's tilt bass (sfx2, note0 0) played two octaves too high.
+    let played = (custom_outer_key(v) + sfx_pitch(cnote) - 24).clamp(0, 63);
     let spu_vol = (VOL_TABLE[ch.note_vol as usize] as i32 * cvol / 7) as i16;
     let spu_pitch = get_pitch(played, cwave);
     let voice = Voice::new(v as u8);
@@ -297,8 +305,12 @@ unsafe fn custom_modulate(v: usize) {
     let in_eff = sfx_effect(cnote);
     let out_eff = sfx_effect(AUDIO.sfx_notes[s][ch.note_pos as usize]);
     let cwave = sfx_instr(cnote);
-    let base = sfx_pitch(AUDIO.sfx_notes[k][0]);
-    let played = (custom_outer_key(v) + sfx_pitch(cnote) - base).clamp(0, 63);
+    // PICO-8 custom instruments transpose around C2 (pitch 24), NOT the instrument
+    // SFX's own first note: played_freq = inner_freq * outer_freq/freq(24), i.e.
+    // played_key = inner_key + (outer_key - 24) (zepto8 sfx.cpp). Using note0 as the
+    // reference put any instrument whose note0 != 24 off by (note0-24) semitones --
+    // e.g. celeste2's tilt bass (sfx2, note0 0) played two octaves too high.
+    let played = (custom_outer_key(v) + sfx_pitch(cnote) - 24).clamp(0, 63);
     let voice = Voice::new(v as u8);
 
     // Pitch: arp/slide/drop are already in `played`; vibrato (inner or outer) is a
@@ -674,6 +686,16 @@ pub fn update() {
             for c in 0..4 {
                 advance_channel(c);
             }
+            // Isolation harness: zero the volume of any muted channel (+ its phaser
+            // buddy) after it has sequenced, so soloing one instrument is exact.
+            if MUSIC_MUTE != 0 {
+                for c in 0..4 {
+                    if MUSIC_MUTE & (1 << c) != 0 {
+                        Voice::new(c as u8).set_volume(Volume(0), Volume(0));
+                        Voice::new((c + PHASER_BUDDY) as u8).set_volume(Volume(0), Volume(0));
+                    }
+                }
+            }
             MUSIC_TICK += TICK_INC;
             if MUSIC_TICK >= MUSIC_LEN {
                 let flags = AUDIO.music_patterns[MUSIC_PATTERN as usize][0];
@@ -699,6 +721,14 @@ pub fn update() {
         for s in 0..NUM_SFX_VOICES {
             advance_channel(SFX_VOICE_BASE + s);
         }
+    }
+}
+
+/// Debug/test: silence music channels whose bit is set in `mask` (bit c = channel
+/// c). They keep sequencing, so soloing one instrument leaves the rest in time.
+pub fn set_music_mute(mask: u8) {
+    unsafe {
+        MUSIC_MUTE = mask;
     }
 }
 

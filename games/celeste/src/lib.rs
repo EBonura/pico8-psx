@@ -201,6 +201,35 @@ pub fn run_music_test(pattern: i32) {
     }
 }
 
+/// Offline per-instrument isolation: play `pattern` five times in fixed windows --
+/// full mix, then each music channel 0..3 SOLO'd -- separated by silence, so the
+/// host can split the capture and compare each instrument to a channel-soloed
+/// PICO-8 recording. Not part of the game.
+pub fn run_music_iso(pattern: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    let masks = [0u8, 0x0E, 0x0D, 0x0B, 0x07];
+    let mut i = 0;
+    loop {
+        sfx::set_music_mute(masks[i]);
+        sfx::music(pattern, 0, 0);
+        for _ in 0..420 {
+            sfx::update();
+            gpu::vsync();
+        }
+        sfx::music(-1, 0, 0);
+        sfx::set_music_mute(0);
+        for _ in 0..72 {
+            sfx::update();
+            gpu::vsync();
+        }
+        i += 1;
+        if i >= masks.len() {
+            return;
+        }
+    }
+}
+
 /// Matched-test AudioData: the synthtest songs (tools/synthtest_gen.py) on
 /// Celeste's real waveforms + pitch table. Lets us replicate, on the PSX engine,
 /// the exact same isolated songs a PICO-8 cart plays, and diff them.

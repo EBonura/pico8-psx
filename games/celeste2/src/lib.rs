@@ -181,3 +181,33 @@ pub fn run_music_test(pattern: i32) {
         gpu::vsync();
     }
 }
+
+/// Offline per-instrument isolation: play `pattern` five times in fixed windows --
+/// full mix, then each music channel 0..3 SOLO'd (others muted) -- separated by
+/// silence, so the host can split the capture and compare each instrument against
+/// a channel-soloed PICO-8 recording. Not part of the game.
+pub fn run_music_iso(pattern: i32) {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    sfx::init(AUDIO);
+    // mute masks: 0=full, then solo ch0/1/2/3 (mute the other three of the low 4).
+    let masks = [0u8, 0x0E, 0x0D, 0x0B, 0x07];
+    let mut i = 0;
+    loop {
+        sfx::set_music_mute(masks[i]);
+        sfx::music(pattern, 0, 0);
+        for _ in 0..420 {
+            sfx::update();
+            gpu::vsync();
+        }
+        sfx::music(-1, 0, 0);
+        sfx::set_music_mute(0);
+        for _ in 0..72 {
+            sfx::update();
+            gpu::vsync();
+        }
+        i += 1;
+        if i >= masks.len() {
+            return;
+        }
+    }
+}
