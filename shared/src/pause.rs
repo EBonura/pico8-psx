@@ -109,51 +109,69 @@ impl Pause {
     /// Coordinates are PICO-8 128-space; the caller should have camera at (0,0).
     pub fn draw(&self) {
         backend::camera(0, 0);
+        let fly = self.fly;
 
-        // A framed panel over the (frozen) game: black fill, 1px border, then a
-        // dark inset so the text reads regardless of what's behind. The FLY row
-        // adds one line, so grow the panel when it's shown.
-        let extra: i16 = if self.fly { 12 } else { 0 };
-        backend::rectfill(17, 29, 110, 97 + extra, 7); // border
-        backend::rectfill(18, 30, 109, 96 + extra, 0); // black fill
-        backend::rectfill(20, 32, 107, 94 + extra, 1); // dark-blue inset
+        // row + panel geometry (grows by one row + a hint line when fly is shown)
+        let sfx_y = 42i16;
+        let music_y = 54i16;
+        let fly_y = 66i16;
+        let quit_y = if fly { 82 } else { 70 };
+        let footer_y = quit_y + 13;
+        let hint_y = footer_y + 9;
+        let bottom = if fly { hint_y + 8 } else { footer_y + 8 };
 
-        print_centered(b"PAUSED", 36, 7);
+        // framed panel: white border, black fill, a lavender title bar
+        backend::rectfill(12, 22, 115, bottom, 7);
+        backend::rectfill(13, 23, 114, bottom - 1, 0);
+        backend::rectfill(13, 23, 114, 33, 13);
+        print_centered(b"PAUSED", 25, 7);
 
-        self.draw_slider(ROW_SFX, b"SFX", sfx::sfx_volume(), 50);
-        self.draw_slider(ROW_MUSIC, b"MUSIC", sfx::music_volume(), 62);
+        // selection highlight bar + cursor
+        let sel_y = match self.sel {
+            ROW_SFX => sfx_y,
+            ROW_MUSIC => music_y,
+            r if fly && r == ROW_FLY => fly_y,
+            _ => quit_y,
+        };
+        backend::rectfill(15, sel_y - 2, 112, sel_y + 6, 1);
+        backend::print(b">", 17, sel_y, 7);
 
-        let mut y: i16 = 78;
-        if self.fly {
+        self.draw_slider(ROW_SFX, b"SFX", sfx::sfx_volume(), sfx_y);
+        self.draw_slider(ROW_MUSIC, b"MUSIC", sfx::music_volume(), music_y);
+
+        if fly {
             let lit = self.sel == ROW_FLY;
-            backend::print(b"FLY", 26, y, if lit { 7 } else { 6 });
+            draw_tri(26, fly_y, 11); // green PS1-triangle icon
+            backend::print(b"FLY", 34, fly_y, if lit { 7 } else { 6 });
             let on = crate::debug::fly_enabled();
-            backend::print(if on { b"ON" } else { b"OFF" }, 62, y, if on { 10 } else { 5 });
-            y += 12;
+            backend::print(if on { b"ON" } else { b"OFF" }, 92, fly_y, if on { 11 } else { 5 });
         }
 
         let quit_c = if self.sel == self.quit_row() { 7 } else { 6 };
-        print_centered(b"QUIT TO MENU", y, quit_c);
+        backend::print(b"QUIT TO MENU", 26, quit_y, quit_c);
 
-        print_centered(b"START RESUMES", y + 10, 5);
+        print_centered(b"START = RESUME", footer_y, 6);
+        if fly {
+            // "HOLD <tri> TO FLY" -- spell out the activation button
+            backend::print(b"HOLD", 38, hint_y, 5);
+            draw_tri(58, hint_y, 11);
+            backend::print(b"TO FLY", 66, hint_y, 5);
+        }
     }
 
     fn draw_slider(&self, row: u8, label: &[u8], vol: u16, y: i16) {
         let lit = self.sel == row;
-        let label_c = if lit { 7 } else { 6 };
-        backend::print(label, 26, y, label_c);
-
-        // 8-cell bar starting at x=62; filled cells bright, empty cells dark.
-        let x0: i16 = 62;
-        for i in 0..8u16 {
-            let cx = x0 + (i as i16) * 5;
-            let c = if i < vol {
-                if lit { 10 } else { 6 }
-            } else {
-                5
-            };
-            backend::rectfill(cx, y, cx + 3, y + 4, c);
+        backend::print(label, 26, y, if lit { 7 } else { 6 });
+        // a 40px track with a filled portion and a handle at the fill end
+        let tx: i16 = 54;
+        let tw: i16 = 40;
+        backend::rectfill(tx, y + 1, tx + tw, y + 3, 5); // track
+        let fw = (vol as i16) * tw / 8;
+        if fw > 0 {
+            backend::rectfill(tx, y + 1, tx + fw, y + 3, if lit { 11 } else { 3 });
         }
+        let kx = tx + fw;
+        backend::rectfill(kx - 1, y - 1, kx + 1, y + 5, if lit { 7 } else { 6 }); // handle
     }
 }
 
@@ -161,4 +179,10 @@ impl Pause {
 fn print_centered(s: &[u8], y: i16, c: i32) {
     let w = (s.len() as i16) * 4;
     backend::print(s, 64 - w / 2, y, c);
+}
+
+/// A small upward-pointing filled triangle (~5x4 px) -- the PS1 Triangle button
+/// icon. Drawn as a quad with a doubled last vertex so it collapses to a tri.
+fn draw_tri(x: i16, y: i16, c: i32) {
+    backend::quad([(x + 2, y), (x, y + 4), (x + 4, y + 4), (x + 4, y + 4)], c);
 }
