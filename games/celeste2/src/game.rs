@@ -714,8 +714,8 @@ unsafe fn hazard_check(i: usize, ox: Fix32, oy: Fix32) -> bool {
 
 unsafe fn player_die(i: usize) {
     OBJ[i].state = 99;
-    FREEZE = 2;
-    SHAKE = 5;
+    FREEZE = 4; // 60fps: PICO-8 freeze_time=2 doubled
+    SHAKE = 10; // 60fps: PICO-8 shake=5 doubled
     DEATH_COUNT += 1;
     psfx_lock(14, 16, 16, 240);
 }
@@ -1328,7 +1328,7 @@ unsafe fn player_update(i: usize) {
                 if !OBJ[j].falling && overlaps(i, j, Fix32::ZERO, Fix32::ZERO) {
                     OBJ[j].falling = true;
                     OBJ[i].freeze = 2; // 60fps: PICO-8 freeze=1 doubled
-                    SHAKE = 2;
+                    SHAKE = 4; // 60fps: PICO-8 shake=2 doubled
                     psfx(8, 16, 4);
                 }
             }

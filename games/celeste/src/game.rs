@@ -1197,7 +1197,7 @@ unsafe fn chest_update(this: *mut Obj) {
         (*this).timer -= 1;
         (*this).x = (*this).start - fi(1) + rng::rnd(fi(3));
         if (*this).timer <= 0 {
-            SFX_TIMER = 20;
+            SFX_TIMER = 40; // 60fps: PICO-8 sfx_timer 20 doubled (matches the other fruit spawns)
             sfx::play(16);
             init_object(Fruit, (*this).x, (*this).y - fi(4));
             destroy_object(this);
@@ -1823,11 +1823,13 @@ pub fn draw() {
                 if (*p).t <= fi(0) {
                     (*p).active = false;
                 }
+                // size uses t/10, not the cart's t/5: t was doubled for 60fps, so
+                // the divisor doubles too or the death squares draw at 2x size.
                 p8rectfill(
-                    ((*p).x - (*p).t / fi(5)).to_int(),
-                    ((*p).y - (*p).t / fi(5)).to_int(),
-                    ((*p).x + (*p).t / fi(5)).to_int(),
-                    ((*p).y + (*p).t / fi(5)).to_int(),
+                    ((*p).x - (*p).t / fi(10)).to_int(),
+                    ((*p).y - (*p).t / fi(10)).to_int(),
+                    ((*p).x + (*p).t / fi(10)).to_int(),
+                    ((*p).y + (*p).t / fi(10)).to_int(),
                     (14 + (*p).t.rem_floor(fi(2)).to_int()),
                 );
             }
