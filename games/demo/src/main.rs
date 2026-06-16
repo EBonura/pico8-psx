@@ -176,7 +176,7 @@ fn show_credits() {
         (b"built with psoxide", 6),
         (b"github.com/ebonura/psoxide", 12),
         (b"", 0),
-        (b"-- original games --", 5),
+        (b"the original games", 5),
         (b"", 0),
         (b"celeste classic   2016", 7),
         (b"maddy thorson  noel berry", 6),
