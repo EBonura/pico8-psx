@@ -398,7 +398,7 @@ unsafe fn draw_snow() {
         let py = fi(CAM_Y) + (s.y - fi(CAM_Y) * HALF).rem_floor(fi(132));
         backend::circfill(px.to_int() as i16, py.to_int() as i16, (i as i32 % 2) as i16, 7);
         s.x += fi(4 - (i as i32) % 4) * HALF;
-        s.y += (t * fx(0.25) + fi(i as i32) * fx(0.1)).sin();
+        s.y += (t * fx(0.25) + fi(i as i32) * fx(0.1)).sin() * HALF; // 60fps: halved (matches x)
         SNOW[i] = s;
     }
 }
@@ -966,7 +966,8 @@ unsafe fn obj_on_release(obj: usize, thrown: bool) {
             if !thrown {
                 OBJ[obj].stop = true;
             }
-            OBJ[obj].timer = 8; // thrown_timer
+            OBJ[obj].timer = 16; // thrown_timer (60fps: PICO-8 8 doubled) -- the
+            // window where a just-thrown snowball can't hurt the player
         }
         ObjType::Springboard => {
             if thrown {
@@ -1001,8 +1002,9 @@ unsafe fn player_update(i: usize) {
 
     // grapple retract animation
     if OBJ[i].grapple_retract {
-        OBJ[i].grapple_x = approach(OBJ[i].grapple_x, OBJ[i].x, fi(12));
-        OBJ[i].grapple_y = approach(OBJ[i].grapple_y, OBJ[i].y - fi(3), fi(6));
+        // rope retract approach halved for 60fps (PICO-8 12 / 6)
+        OBJ[i].grapple_x = approach(OBJ[i].grapple_x, OBJ[i].x, fi(6));
+        OBJ[i].grapple_y = approach(OBJ[i].grapple_y, OBJ[i].y - fi(3), fi(3));
         if OBJ[i].grapple_x == OBJ[i].x && OBJ[i].grapple_y == OBJ[i].y - fi(3) {
             OBJ[i].grapple_retract = false;
         }
@@ -1108,7 +1110,7 @@ unsafe fn player_update(i: usize) {
                     break;
                 }
             }
-            OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, fi(1), fx(0.2));
+            OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, fi(1), fx(0.1)); // 60fps: 0.2 halved
             OBJ[i].spr = fi(3);
             if !grabbed && (!GRAP_HELD || (OBJ[i].y - OBJ[i].grapple_y).abs() > fi(8)) {
                 OBJ[i].state = 0;
@@ -1143,7 +1145,7 @@ unsafe fn player_update(i: usize) {
                     player_grapple_jump(i);
                 }
             }
-            OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, Fix32::ZERO, fx(0.6));
+            OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, Fix32::ZERO, fx(0.3)); // 60fps: 0.6 halved
             let dead = OBJ[i].grapple_hit != NONE && OBJ[OBJ[i].grapple_hit].destroyed;
             if !GRAP_HELD || dead {
                 OBJ[i].state = 0;
@@ -1196,8 +1198,9 @@ unsafe fn player_update(i: usize) {
             if h == NONE {
                 OBJ[i].state = 0;
             } else {
-                OBJ[h].x = approach(OBJ[h].x, OBJ[i].x - fi(4), fi(4));
-                OBJ[h].y = approach(OBJ[h].y, OBJ[i].y - fi(14), fi(4));
+                // per-frame approach halved for 60fps (PICO-8 amount 4)
+                OBJ[h].x = approach(OBJ[h].x, OBJ[i].x - fi(4), fi(2));
+                OBJ[h].y = approach(OBJ[h].y, OBJ[i].y - fi(14), fi(2));
                 if OBJ[h].x == OBJ[i].x - fi(4) && OBJ[h].y == OBJ[i].y - fi(14) {
                     OBJ[i].state = 0;
                     OBJ[i].holding = h;
@@ -1210,9 +1213,10 @@ unsafe fn player_update(i: usize) {
             if sb == NONE {
                 OBJ[i].state = 0;
             } else {
-                let at_x = approach(OBJ[i].x, OBJ[sb].x + fi(4), fx(0.5));
+                // per-frame settle approach halved for 60fps (PICO-8 0.5 / 0.2)
+                let at_x = approach(OBJ[i].x, OBJ[sb].x + fi(4), fx(0.25));
                 move_x_exact(i, at_x - OBJ[i].x);
-                let at_y = approach(OBJ[i].y, OBJ[sb].y + fi(4), fx(0.2));
+                let at_y = approach(OBJ[i].y, OBJ[sb].y + fi(4), fx(0.1));
                 move_y_exact(i, at_y - OBJ[i].y);
                 if OBJ[sb].spr == fi(11) && OBJ[i].y >= OBJ[sb].y + fi(2) {
                     OBJ[sb].spr = fi(12);
@@ -1237,13 +1241,14 @@ unsafe fn player_update(i: usize) {
                     OBJ[obj].held = false;
                     return;
                 } else {
-                    OBJ[i].grapple_x = approach(OBJ[i].grapple_x, OBJ[i].x, fi(6));
+                    // rope retract halved for 60fps to match the halved object pull (PICO-8 6)
+                    OBJ[i].grapple_x = approach(OBJ[i].grapple_x, OBJ[i].x, fi(3));
                 }
                 if OBJ[obj].y != OBJ[i].y - fi(7) {
                     let d = sign(OBJ[i].y - OBJ[obj].y - fi(7)) * fx(0.5);
                     move_y(obj, d, Collide::Stop);
                 }
-                OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, Fix32::ZERO, fx(0.6));
+                OBJ[i].grapple_wave = approach(OBJ[i].grapple_wave, Fix32::ZERO, fx(0.3)); // 60fps: 0.6 halved
                 if overlaps(i, obj, Fix32::ZERO, Fix32::ZERO) {
                     OBJ[i].state = 1;
                     psfx(7, 16, 6);
@@ -1322,7 +1327,7 @@ unsafe fn player_update(i: usize) {
             ObjType::Bridge => {
                 if !OBJ[j].falling && overlaps(i, j, Fix32::ZERO, Fix32::ZERO) {
                     OBJ[j].falling = true;
-                    OBJ[i].freeze = 1;
+                    OBJ[i].freeze = 2; // 60fps: PICO-8 freeze=1 doubled
                     SHAKE = 2;
                     psfx(8, 16, 4);
                 }
@@ -1331,7 +1336,7 @@ unsafe fn player_update(i: usize) {
                 if overlaps(i, j, Fix32::ZERO, Fix32::ZERO) && OBJ[j].link == NONE && OBJ[j].timer == 0 && !OBJ[j].stop {
                     OBJ[j].link = i; // collected -> follow player
                     OBJ[j].timer = 0;
-                    OBJ[j].flash = 5; // pickup flash ring
+                    OBJ[j].flash = 10; // pickup flash ring (60fps: PICO-8 5 doubled)
                     LAST_BERRY = j; // grabbing this deposits any older carried berry
                     psfx(7, 12, 4);
                 }
@@ -1341,7 +1346,7 @@ unsafe fn player_update(i: usize) {
                     if bounce_check(i, j) && snowball_bounce_overlaps(j, i) {
                         player_bounce(i, OBJ[j].x + fi(4), OBJ[j].y);
                         psfx(17, 0, 2);
-                        OBJ[j].freeze = 1;
+                        OBJ[j].freeze = 2; // 60fps: PICO-8 freeze=1 doubled
                         OBJ[j].spd.y = fi(-1);
                         snowball_hurt(j);
                     } else if OBJ[j].spd.x != Fix32::ZERO
@@ -1442,7 +1447,8 @@ unsafe fn player_update(i: usize) {
         if OBJ[i].y > fi(376) {
             SHOW_SCORE += 1;
         }
-        if SHOW_SCORE == 120 {
+        if SHOW_SCORE == 240 {
+            // 60fps: PICO-8 120 doubled
             music(38);
         }
     }
@@ -1665,7 +1671,8 @@ unsafe fn obj_update(i: usize) {
             if OBJ[i].stop {
                 // collected popup
                 OBJ[i].timer += 1;
-                if OBJ[i].timer > 5 {
+                if OBJ[i].timer > 10 {
+                    // 60fps: PICO-8 5 doubled
                     OBJ[i].y -= fx(0.1);
                 }
                 if OBJ[i].timer > 60 {
@@ -2095,7 +2102,8 @@ pub fn draw() {
         }
 
         // score panel
-        if SHOW_SCORE > 105 {
+        if SHOW_SCORE > 210 {
+            // 60fps: PICO-8 105 doubled
             draw_score();
         }
 
