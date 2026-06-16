@@ -745,7 +745,8 @@ unsafe fn init_obj(i: usize) {
             OBJ[i].oy = OBJ[i].y;
         }
         ObjType::SpawnerR | ObjType::SpawnerL => {
-            OBJ[i].timer = (OBJ[i].x.to_int() / 8) % 32;
+            // PICO-8 spawn period is 32 frames at 30fps -> 64 at 60fps (offset + update).
+            OBJ[i].timer = (OBJ[i].x.to_int() / 8) % 64;
             OBJ[i].rdir = if OBJ[i].otype == ObjType::SpawnerR { 1 } else { -1 };
             OBJ[i].spr = fi(-1); // invisible
         }
@@ -1061,7 +1062,7 @@ unsafe fn player_update(i: usize) {
                     OBJ[i].state = if mode == 3 { 12 } else { 11 };
                     OBJ[i].grapple_wave = fi(2);
                     OBJ[i].grapple_boost = false;
-                    OBJ[i].freeze = 2;
+                    OBJ[i].freeze = 4; // PICO-8 freeze=2 doubled for 60fps
                     psfx(14, 0, 5);
                     break;
                 }
@@ -1069,7 +1070,7 @@ unsafe fn player_update(i: usize) {
                 if hit == 2 || (hit == 0 && new_dist >= fi(64)) {
                     psfx(if hit == 2 { 7 } else { 14 }, 8, 3);
                     OBJ[i].grapple_retract = true;
-                    OBJ[i].freeze = 2;
+                    OBJ[i].freeze = 4; // PICO-8 freeze=2 doubled for 60fps
                     OBJ[i].state = 0;
                     break;
                 }
@@ -1632,7 +1633,7 @@ unsafe fn obj_update(i: usize) {
         }
         ObjType::SpawnerR | ObjType::SpawnerL => {
             OBJ[i].timer += 1;
-            if OBJ[i].timer >= 32 && (OBJ[i].x.to_int() - 64 - CAM_X).abs() < 128 {
+            if OBJ[i].timer >= 64 && (OBJ[i].x.to_int() - 64 - CAM_X).abs() < 128 {
                 OBJ[i].timer = 0;
                 let s = create(ObjType::Snowball, OBJ[i].x.to_int(), OBJ[i].y.to_int() - 8);
                 if s != NONE {
@@ -1932,9 +1933,15 @@ pub fn update() {
             FREEZE -= 1;
             return;
         }
-        // player first, then the rest (snapshot order)
+        // player first, then the rest (snapshot order). Honor the player's per-object
+        // freeze like PICO-8's object loop does (skip + decrement while freeze > 0):
+        // the grapple sets freeze = 2 on latch/miss for a brief hitstop.
         if PLAYER != NONE && OBJ[PLAYER].exists {
-            player_update(PLAYER);
+            if OBJ[PLAYER].freeze > 0 {
+                OBJ[PLAYER].freeze -= 1;
+            } else {
+                player_update(PLAYER);
+            }
         }
         for i in 0..MAX_OBJ {
             if OBJ[i].exists && OBJ[i].otype != ObjType::Player {
