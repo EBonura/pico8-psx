@@ -168,13 +168,14 @@ pub const SOUNDTEST_GAP_FRAMES: u32 = 18; // ~0.3s
 pub fn run_sfx_soundtest(frames: &[u16]) {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
     sfx::init(AUDIO);
+    psx_rt::interrupts::install_vblank_counter(); // real 60Hz (gpu::vsync is ~65fps)
 
     let mut n: usize = 0;
     loop {
         sfx::play(-1);
         for _ in 0..SOUNDTEST_GAP_FRAMES {
             sfx::update();
-            gpu::vsync();
+            wait_vblank();
         }
 
         if n >= frames.len() {
@@ -184,7 +185,7 @@ pub fn run_sfx_soundtest(frames: &[u16]) {
         sfx::play(n as i32);
         for _ in 0..frames[n] {
             sfx::update();
-            gpu::vsync();
+            wait_vblank();
         }
         n += 1;
     }
@@ -214,6 +215,7 @@ pub fn run_music_test(pattern: i32) {
 pub fn run_music_iso(pattern: i32) {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
     sfx::init(AUDIO);
+    psx_rt::interrupts::install_vblank_counter();
     let masks = [0u8, 0x0E, 0x0D, 0x0B, 0x07];
     let mut i = 0;
     loop {
@@ -221,13 +223,13 @@ pub fn run_music_iso(pattern: i32) {
         sfx::music(pattern, 0, 0);
         for _ in 0..420 {
             sfx::update();
-            gpu::vsync();
+            wait_vblank();
         }
         sfx::music(-1, 0, 0);
         sfx::set_music_mute(0);
         for _ in 0..72 {
             sfx::update();
-            gpu::vsync();
+            wait_vblank();
         }
         i += 1;
         if i >= masks.len() {
