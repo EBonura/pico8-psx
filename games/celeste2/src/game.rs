@@ -326,6 +326,10 @@ static mut DEATH_COUNT: i32 = 0;
 static mut SHOW_SCORE: i32 = -1; // <0 = inactive; ramps up on the finale
 // Title / level-intro / fade state.
 static mut TITLE_FLASH: i32 = i32::MIN; // MIN = not started; counts down once set
+// The titlescreen ignores jump/grapple until they've been released once after
+// boot, so the X still held from the launcher's "play" (or a "quit to menu")
+// doesn't instantly skip the title. Set true once both are up.
+static mut TITLE_READY: bool = false;
 static mut LEVEL_INTRO: i32 = 0;
 static mut INFADE: i32 = 60; // level-entry wipe (counts up to 60)
 static mut SCARF: [Vec2; 5] = [VZ; 5];
@@ -1939,6 +1943,7 @@ pub fn init() {
         LEVEL_CHECKPOINT = -1;
         SHOW_SCORE = 0;
         TITLE_FLASH = i32::MIN;
+        TITLE_READY = false; // re-arm: wait for the launch button to be released
         LEVEL_INTRO = 0;
         INFADE = 120; // 60fps: "fade complete" sentinel (PICO-8 60 doubled)
         SHAKE = 0;
@@ -1963,9 +1968,14 @@ pub fn update() {
                 if TITLE_FLASH < -60 {
                     goto_level(1);
                 }
-            } else if held(IN_JUMP) || held(IN_GRAPPLE) {
+            } else if TITLE_READY && (held(IN_JUMP) || held(IN_GRAPPLE)) {
                 TITLE_FLASH = 100; // PICO-8 50 frames doubled for 60fps
                 sfx::play(22);
+            }
+            // arm only after the launch button is released, so a held X can't
+            // auto-start the title (void the carried-over press).
+            if !held(IN_JUMP) && !held(IN_GRAPPLE) {
+                TITLE_READY = true;
             }
             return;
         }

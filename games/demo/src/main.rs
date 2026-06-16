@@ -95,7 +95,11 @@ fn show_menu() -> usize {
     sfx::init(celeste::AUDIO); // menu blips run off Celeste's sound bank
 
     let mut sel: usize = 0;
-    let mut prev = ButtonState::from_bits(0);
+    // Seed `prev` with whatever is held right now so a button still down from the
+    // screen we came from doesn't read as a fresh press. Without this, pressing X
+    // for "quit to menu" in a game carries the held X into the menu and instantly
+    // re-launches the first game. A held button is voided until released + pressed.
+    let mut prev = poll_port1().buttons;
 
     loop {
         let b = poll_port1().buttons;
