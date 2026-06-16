@@ -22,6 +22,7 @@
 extern crate psx_rt;
 
 mod assets;
+mod atmos;
 
 use assets::cover_bonnie::COVER_BONNIE;
 use assets::cover_celeste::COVER_CELESTE;
@@ -30,7 +31,7 @@ use assets::palette::PICO8_CLUT;
 
 use pico8::sfx;
 use psx_font::{fonts::BASIC, FontAtlas};
-use psx_gpu::{self as gpu, framebuf::FrameBuffer, material::BlendMode, Resolution, VideoMode};
+use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
 use psx_vram::{upload_16bpp, Clut, TexDepth, Tpage, VramRect};
 
@@ -82,6 +83,7 @@ fn wait_vblank() {
 #[no_mangle]
 fn main() {
     psx_rt::interrupts::install_vblank_counter();
+    atmos::init(); // seed the menu's cloud/particle backdrops
     show_intro(); // Bonnie Studios logo fade -> menu (once, on boot)
     loop {
         match show_menu() {
@@ -292,16 +294,11 @@ fn show_menu() -> usize {
         }
         prev = b;
 
-        // Atmospheric backdrop: a gentle vertical gradient (cooler for Celeste,
-        // warmer/purple for Celeste 2) plus a drifting, twinkling starfield.
-        fb.clear(8, 10, 26);
-        draw_gradient(sel);
-        draw_stars(frame);
-
-        // Soft pulsing blue glow around the selected cover (replaces the old flat
-        // yellow border): layered additive translucent rects, brightest at the edge.
-        let sel_x = if sel == 0 { COVER1_X } else { COVER2_X };
-        draw_glow(sel_x, COVER_Y, frame);
+        // Atmospheric backdrop: the selected game's own clouds + particles
+        // (Celeste 1's drifting cloud bars + dust, or Celeste 2's parallax
+        // clouds + snow), drawn in the centred playfield over a black field.
+        fb.clear(0, 0, 0);
+        atmos::draw(sel, frame);
 
         // Covers: the selected one full-bright, the other dimmed.
         let (t0, t1) = if sel == 0 {
@@ -311,6 +308,10 @@ fn show_menu() -> usize {
         };
         draw_cover(COVER1_TPAGE, COVER1_X, COVER_Y, t0);
         draw_cover(COVER2_TPAGE, COVER2_X, COVER_Y, t1);
+
+        // Selection tracer: a comet that runs around the chosen cover.
+        let sel_x = if sel == 0 { COVER1_X } else { COVER2_X };
+        atmos::draw_tracer(sel_x, COVER_Y, COVER_W, frame);
 
         // Title, per-cover labels, and the controls hints.
         let title = "Celeste Classic Collection";
@@ -335,60 +336,6 @@ fn show_menu() -> usize {
         wait_vblank();
         fb.swap();
         frame = frame.wrapping_add(1);
-    }
-}
-
-/// Vertical gradient backdrop, tinted by the current selection (cool navy for
-/// Celeste, warmer purple for Celeste 2). Two Gouraud triangles span the screen.
-fn draw_gradient(sel: usize) {
-    let (top, bot) = if sel == 0 {
-        ((6, 10, 32), (16, 14, 48))
-    } else {
-        ((20, 8, 34), (30, 14, 48))
-    };
-    gpu::draw_tri_gouraud([(0, 0), (320, 0), (0, 240)], [top, top, bot]);
-    gpu::draw_tri_gouraud([(320, 0), (0, 240), (320, 240)], [top, bot, bot]);
-}
-
-/// Drifting, twinkling starfield. Positions are a cheap per-index hash; each star
-/// falls slowly (wrapping) and pulses via a triangle wave -- no persistent state.
-fn draw_stars(frame: i32) {
-    const N: i32 = 56;
-    let mut i = 0;
-    while i < N {
-        let sx = ((i * 71 + 13) % 320) as i16;
-        let speed = 1 + (i % 3);
-        let y = (((i * 109 + 29) % 240 + frame * speed / 5) % 240) as i16;
-        let t = (frame + i * 37) % 80;
-        let tw = if t < 40 { t } else { 80 - t }; // 0..40
-        let b = (0x16 + tw) as u8; // 0x16..0x3E
-        let bl = (b as i32 + 0x12).min(0xFF) as u8; // a touch cooler
-        gpu::draw_quad_flat([(sx, y), (sx + 1, y), (sx, y + 1), (sx + 1, y + 1)], b, b, bl);
-        i += 1;
-    }
-}
-
-/// Soft pulsing blue glow around a cover at `(cover_x, cover_y)`: concentric
-/// additive translucent rects so the colour stacks brightest at the cover edge
-/// and fades outward. Works over any backdrop (no gradient-to-bg trick needed).
-fn draw_glow(cover_x: i16, cover_y: i16, frame: i32) {
-    const LAYERS: i16 = 10;
-    const STEP: i16 = 3;
-    // pulse 88..118 (of 128 = unity) on a slow triangle wave
-    let t = frame % 96;
-    let p = if t < 48 { t } else { 96 - t } as i16; // 0..48
-    let pulse = 86 + p * 32 / 48; // ~86..118
-    let mut layer = 0i16;
-    while layer < LAYERS {
-        let m = (LAYERS - layer) * STEP; // outer layers are larger
-        let (x0, y0) = (cover_x - m, cover_y - m);
-        let (x1, y1) = (cover_x + COVER_W + m, cover_y + COVER_H + m);
-        let r = (3 * pulse / 128) as u8;
-        let g = (8 * pulse / 128) as u8;
-        let bl = (22 * pulse / 128) as u8;
-        gpu::draw_tri_flat_blended([(x0, y0), (x1, y0), (x0, y1)], r, g, bl, BlendMode::Add);
-        gpu::draw_tri_flat_blended([(x1, y0), (x0, y1), (x1, y1)], r, g, bl, BlendMode::Add);
-        layer += 1;
     }
 }
 
