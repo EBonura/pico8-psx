@@ -1260,12 +1260,12 @@ unsafe fn player_update(i: usize) {
         99 | 100 => {
             if OBJ[i].state == 100 {
                 OBJ[i].x += fi(1); // stride off-screen during the wipe
-                if OBJ[i].wipe_timer == 5 && LVL_INDEX > 1 {
+                if OBJ[i].wipe_timer == 10 && LVL_INDEX > 1 {
                     psfx(17, 24, 9); // level-finish sound
                 }
             }
             OBJ[i].wipe_timer += 1;
-            if OBJ[i].wipe_timer > 20 {
+            if OBJ[i].wipe_timer > 40 {
                 if OBJ[i].state == 99 {
                     restart_level();
                 } else {
@@ -1402,7 +1402,7 @@ unsafe fn player_update(i: usize) {
     if OBJ[i].state < 99 && (OBJ[i].y > fi(LVL_H * 8 + 16) || hazard_check(i, Fix32::ZERO, Fix32::ZERO)) {
         if LVL_INDEX == 1 && OBJ[i].x > fi(LVL_W * 8 - 64) {
             OBJ[i].state = 100;
-            OBJ[i].wipe_timer = -15;
+            OBJ[i].wipe_timer = -30; // 60fps: PICO-8 -15 doubled
         } else {
             player_die(i);
         }
@@ -1453,7 +1453,7 @@ unsafe fn player_draw(i: usize) {
 
     // death fx: an expanding ring of shrinking circles
     if o.state == 99 {
-        let e = fi(o.wipe_timer) / fi(10);
+        let e = fi(o.wipe_timer) / fi(20); // 60fps: PICO-8 /10 doubled
         if e <= fi(1) {
             let dx = clamp(o.x, fi(CAM_X), fi(CAM_X + 128));
             let dy = clamp(o.y - fi(4), Fix32::ZERO, fi(128));
@@ -1468,18 +1468,21 @@ unsafe fn player_draw(i: usize) {
         return;
     }
 
-    // scarf: 5 damped trailing segments (PICO-8 colour 10)
+    // scarf: 5 damped trailing segments (PICO-8 colour 10). The per-frame approach
+    // steps are HALVED for 60fps (PICO-8 /1.5 and /2 -> /3 and /4): at 60fps the
+    // segments otherwise track the player twice as tightly per real second, so the
+    // scarf lagged half as far and barely peeked out from behind the sprite. The
+    // 1.5px segment-spacing CLAMP is a position limit, not a per-frame move, so it
+    // is unchanged (it still stops fast moves from streaking the scarf into stray
+    // pixels across the level).
     let t = fi(FRAMES) / fi(60);
     let mut last = Vec2 { x: o.x - fi(o.facing), y: o.y - fi(3) };
     for k in 1..=5 {
         let mut s = SCARF[k - 1];
-        s.x += (last.x - s.x - fi(o.facing)) / fx(1.5);
+        s.x += (last.x - s.x - fi(o.facing)) / fx(3.0);
         let ki = fi(k as i32);
         let wob = (ki * fx(0.25) + t).sin() * ki * fx(0.25);
-        s.y += ((last.y - s.y) + wob) / fi(2);
-        // don't let a segment get too far from the previous one (Lua clamp) --
-        // without this, fast moves (wall jump / grapple) streak the scarf into
-        // stray colour-10 pixels across the level.
+        s.y += ((last.y - s.y) + wob) / fi(4);
         let dx = s.x - last.x;
         let dy = s.y - last.y;
         let dist = (dx * dx + dy * dy).sqrt();
@@ -1567,17 +1570,20 @@ unsafe fn obj_update(i: usize) {
             // small lip, else hurt, else bounce back.
             move_x(i, sx, Collide::SnowballX);
             if move_y(i, sy, Collide::Stop) {
-                // bounce off the floor using the PRE-collision speed (Collide::Stop
-                // zeroed spd.y, so the tiers below never fired -> snowballs never
-                // bounced, they sat). PICO-8: >=4 -> -2, >=1 -> -1, else 0.
-                if sy >= fi(4) {
-                    OBJ[i].spd.y = fi(-2);
-                    psfx(17, 0, 2);
-                } else if sy >= fi(1) {
-                    OBJ[i].spd.y = fi(-1);
+                // Bounce off the floor using the PRE-collision speed (Collide::Stop
+                // zeroed spd.y). PICO-8's tiers were >=4 -> -2, >=1 -> -1, else 0,
+                // but the >=1 -> -1 tier perfectly restitutes at the 1px/frame
+                // boundary: at 30fps the pixel-quantised fall lost enough energy to
+                // settle, but at 60fps's finer timestep the snowball returns at +1
+                // and re-bounces forever. Use a half-speed bounce that rests below
+                // 2 instead -- 4 -> -2, 2 -> -1 still match the cart, and it decays
+                // (return ~2 -> -1 -> return ~1 -> rest) so it settles in a bounce
+                // or two like the original.
+                if sy >= fi(2) {
+                    OBJ[i].spd.y = -(sy * fx(0.5));
                     psfx(17, 0, 2);
                 } else {
-                    OBJ[i].spd.y = Fix32::ZERO;
+                    OBJ[i].spd.y = Fix32::ZERO; // too slow (or a ceiling hit) -> rest
                 }
                 OBJ[i].rem.y = Fix32::ZERO;
             }
@@ -1927,7 +1933,7 @@ pub fn init() {
         SHOW_SCORE = 0;
         TITLE_FLASH = i32::MIN;
         LEVEL_INTRO = 0;
-        INFADE = 60;
+        INFADE = 120; // 60fps: "fade complete" sentinel (PICO-8 60 doubled)
         SHAKE = 0;
         FREEZE = 0;
         CAM_X = 0;
@@ -1971,7 +1977,7 @@ pub fn update() {
         if SHAKE > 0 {
             SHAKE -= 1;
         }
-        INFADE = (INFADE + 1).min(60);
+        INFADE = (INFADE + 1).min(120); // 60fps: PICO-8 fade timer doubled
         if LVL_INDEX != 8 {
             TIMER_F += 1;
             if TIMER_F >= 60 {
@@ -2117,7 +2123,7 @@ pub fn draw() {
         draw_wipes();
 
         // run timer HUD (hidden briefly during the entry fade)
-        if INFADE < 45 {
+        if INFADE < 90 {
             draw_time((CAM_X + 4) as i16, (CAM_Y + 4) as i16);
         }
 
@@ -2426,15 +2432,15 @@ unsafe fn draw_wipes() {
     let wave = |i: i32, e: Fix32| -> i32 {
         (fi(191) * e - fi(32) + (fi(i) * fx(0.2)).sin() * fi(16) + fi(127 - i) * fx(0.25)).to_int()
     };
-    if PLAYER != NONE && OBJ[PLAYER].exists && OBJ[PLAYER].wipe_timer > 5 {
-        let e = fi(OBJ[PLAYER].wipe_timer - 5) / fi(12);
+    if PLAYER != NONE && OBJ[PLAYER].exists && OBJ[PLAYER].wipe_timer > 10 {
+        let e = fi(OBJ[PLAYER].wipe_timer - 10) / fi(24); // 60fps: -5/12 doubled
         for i in 0..128 {
             let s = wave(i, e);
             backend::rectfill(CAM_X as i16, (CAM_Y + i) as i16, (CAM_X + s) as i16, (CAM_Y + i) as i16, 0);
         }
     }
-    if INFADE < 15 {
-        let e = fi(INFADE) / fi(12);
+    if INFADE < 30 {
+        let e = fi(INFADE) / fi(24); // 60fps: PICO-8 /12 doubled
         for i in 0..128 {
             let s = wave(i, e);
             backend::rectfill((CAM_X + s) as i16, (CAM_Y + i) as i16, (CAM_X + 128) as i16, (CAM_Y + i) as i16, 0);
