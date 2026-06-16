@@ -361,17 +361,26 @@ unsafe fn init_particles() {
 /// level's bottom (sy=0). (The PICO-8 clip that flattens each cloud's bottom and
 /// the fillp fog dither aren't available on the PSX backend; clouds are full
 /// circles and the fog is solid.)
-unsafe fn draw_clouds(scale: Fix32, oy: Fix32, sy: Fix32, color: i32, count: usize) {
+/// `dither` < 0 draws solid clouds; otherwise the FILLP_* pattern (the fog pass on
+/// fogmode-1 levels dithers its clouds with the 50% checker, like the cart's fillp).
+unsafe fn draw_clouds(scale: Fix32, oy: Fix32, sy: Fix32, color: i32, count: usize, dither: i32) {
+    let fill = |cx: i16, cy: i16, r: i16| {
+        if dither < 0 {
+            backend::circfill(cx, cy, r, color);
+        } else {
+            backend::fillp_circfill(cx, cy, r, color, dither as usize);
+        }
+    };
     for i in 0..count {
         let mut c = CLOUDS[i];
         let s = c.s * scale;
         let x = fi(CAM_X) + (c.x - fi(CAM_X) * fx(0.9)).rem_floor(fi(128) + s) - s / fi(2);
         let y = oy + (fi(CAM_Y) + (c.y - fi(CAM_Y) * fx(0.9)).rem_floor(fi(128) + s / fi(2))) * sy;
         let (xi, yi) = (x.to_int() as i16, y.to_int() as i16);
-        backend::circfill(xi, yi, (s / fi(3)).to_int() as i16, color);
+        fill(xi, yi, (s / fi(3)).to_int() as i16);
         if i % 2 == 0 {
-            backend::circfill((x - s / fi(3)).to_int() as i16, yi, (s / fi(5)).to_int() as i16, color);
-            backend::circfill((x + s / fi(3)).to_int() as i16, yi, (s / fi(6)).to_int() as i16, color);
+            fill((x - s / fi(3)).to_int() as i16, yi, (s / fi(5)).to_int() as i16);
+            fill((x + s / fi(3)).to_int() as i16, yi, (s / fi(6)).to_int() as i16);
         }
         c.x += fi(4 - (i as i32) % 4) * fx(0.25) * HALF;
         CLOUDS[i] = c;
@@ -2078,8 +2087,8 @@ pub fn draw() {
         // cls(level.bg): fill the playfield (plus a margin) with the bg colour
         backend::rectfill((CAM_X - 20) as i16, (CAM_Y - 20) as i16, (CAM_X + 148) as i16, (CAM_Y + 148) as i16, lv.bg);
 
-        // background clouds in the level's colour
-        draw_clouds(fi(1), Fix32::ZERO, fi(1), lv.clouds, 26);
+        // background clouds in the level's colour (solid)
+        draw_clouds(fi(1), Fix32::ZERO, fi(1), lv.clouds, 26, -1);
 
         // background pillars
         if lv.columns >= 0 {
@@ -2129,9 +2138,11 @@ pub fn draw() {
         // drifting snow
         draw_snow();
 
-        // foreground fog, pinned to the level's bottom edge
+        // foreground fog, pinned to the level's bottom edge. fogmode 1 dithers the
+        // clouds with the 50% checker (PICO-8 fillp); fogmode 2 draws them solid.
         if lv.fogmode != 0 {
-            draw_clouds(fx(1.25), fi(LVL_H * 8 + 1), Fix32::ZERO, 7, 16);
+            let dither = if lv.fogmode == 1 { backend::FILLP_FOG as i32 } else { -1 };
+            draw_clouds(fx(1.25), fi(LVL_H * 8 + 1), Fix32::ZERO, 7, 16, dither);
         }
 
         // screen wipes (level finish / entry)

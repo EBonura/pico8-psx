@@ -283,6 +283,20 @@ unsafe fn set_tex_window(mask_x: u32, mask_y: u32, off_x: u32, off_y: u32) {
     );
 }
 
+/// Upload the fill CLUT (1 = colour, 0 = transparent), select the pattern's tpage
+/// as the draw mode (GP0 0x2C polys sample the draw-mode tpage), and return the
+/// material to draw dithered quads with. The window MUST travel in the material:
+/// draw_quad_textured_material re-emits it, overwriting a standalone GP0 0xE2.
+/// Callers must `set_tex_window(0,0,0,0)` after their draws to restore sprites/map.
+unsafe fn fillp_material(c: i32, pattern: usize) -> TextureMaterial {
+    let col = PICO8_CLUT[(PAL[(c as usize) & 15] as usize) & 15];
+    upload_16bpp(VramRect::new(FILL_CLUT.x(), FILL_CLUT.y(), 2, 1), &[0u16, col]);
+    FILLP_TPAGE.apply_as_draw_mode();
+    let win = TextureWindow::power_of_two_tile((pattern as u8) * 8, 0, 8, 8); // 8x8 tile @ pattern*8
+    TextureMaterial::opaque(FILL_CLUT.uv_clut_word(), FILLP_TPAGE.uv_tpage_word(0), (0x80, 0x80, 0x80))
+        .with_texture_window(win)
+}
+
 /// PICO-8 `fillp(pattern) rectfill(x0,y0,x1,y1,c)`: a dithered rectangle. The
 /// pattern is screen-fixed, so the rect is clamped to the visible camera window
 /// and the pattern phase follows screen position. `pattern` is one of FILLP_*.
@@ -298,26 +312,55 @@ pub fn fillp_rect(x0: i16, y0: i16, x1: i16, y1: i16, c: i32, pattern: usize) {
         if rx <= lx || by <= ty {
             return;
         }
-        // fill CLUT[1] = colour (through pal); entry 0 stays transparent (0x0000)
-        let col = PICO8_CLUT[(PAL[(c as usize) & 15] as usize) & 15];
-        upload_16bpp(VramRect::new(FILL_CLUT.x(), FILL_CLUT.y(), 2, 1), &[0u16, col]);
-        FILLP_TPAGE.apply_as_draw_mode(); // GP0 0x2C polys take the draw-mode tpage
+        let mat = fillp_material(c, pattern);
         let (u0, v0) = ((lx - CAM_X) as u8, (ty - CAM_Y) as u8);
         let (u1, v1) = ((rx - CAM_X) as u8, (by - CAM_Y) as u8);
         let verts = [(sx(lx), sy(ty)), (sx(rx), sy(ty)), (sx(lx), sy(by)), (sx(rx), sy(by))];
         let uvs = [(u0, v0), (u1, v0), (u0, v1), (u1, v1)];
-        // The window must live in the material -- draw_quad_textured_material emits
-        // it itself, overwriting any standalone GP0 0xE2 we'd set. 8x8 tile at the
-        // pattern's UV (pattern * 8).
-        let win = TextureWindow::power_of_two_tile((pattern as u8) * 8, 0, 8, 8);
-        let mat = TextureMaterial::opaque(
-            FILL_CLUT.uv_clut_word(),
-            FILLP_TPAGE.uv_tpage_word(0),
-            (0x80, 0x80, 0x80),
-        )
-        .with_texture_window(win);
         gpu::draw_quad_textured_material(verts, uvs, mat);
         set_tex_window(0, 0, 0, 0); // reset the window so sprites/map sample fully
+    }
+}
+
+/// PICO-8 `fillp(pattern) circfill(cx,cy,r,c)`: a dithered filled circle, drawn as
+/// dithered 1px scanlines (same midpoint span walk as [`circfill`]). Used for the
+/// fog clouds. Screen-fixed dither, clamped to the camera window per scanline.
+pub fn fillp_circfill(cx: i16, cy: i16, radius: i16, c: i32, pattern: usize) {
+    if radius < 0 {
+        return;
+    }
+    unsafe {
+        let mat = fillp_material(c, pattern);
+        let (camx, camy) = (CAM_X, CAM_Y);
+        let span = |dx: i32, yy: i16| {
+            if yy < camy || yy >= camy + 128 {
+                return;
+            }
+            let lx = (cx - dx as i16).max(camx);
+            let rx = (cx + dx as i16 + 1).min(camx + 128);
+            if rx <= lx {
+                return;
+            }
+            let (u0, u1, v) = ((lx - camx) as u8, (rx - camx) as u8, (yy - camy) as u8);
+            let verts =
+                [(sx(lx), sy(yy)), (sx(rx), sy(yy)), (sx(lx), sy(yy + 1)), (sx(rx), sy(yy + 1))];
+            let uvs = [(u0, v), (u1, v), (u0, v.wrapping_add(1)), (u1, v.wrapping_add(1))];
+            gpu::draw_quad_textured_material(verts, uvs, mat);
+        };
+        let r2 = radius as i32 * radius as i32;
+        let mut dx = radius as i32;
+        let mut dy = 0i32;
+        while dy <= radius as i32 {
+            while dx * dx + dy * dy > r2 {
+                dx -= 1;
+            }
+            span(dx, cy + dy as i16);
+            if dy != 0 {
+                span(dx, cy - dy as i16);
+            }
+            dy += 1;
+        }
+        set_tex_window(0, 0, 0, 0);
     }
 }
 
