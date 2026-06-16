@@ -1519,18 +1519,23 @@ unsafe fn obj_update(i: usize) {
             }
             let sx = OBJ[i].spd.x;
             let sy = OBJ[i].spd.y;
-            // snowball wall bounce
+            // snowball wall bounce: reverse the PRE-collision velocity (Collide::Stop
+            // has already zeroed spd.x, so negating it gave -0 = 0 -> snowballs were
+            // stopping at walls instead of bouncing back. PICO-8: speed_x *= -1).
             if move_x(i, sx, Collide::Stop) && !snowball_hurt(i) {
-                OBJ[i].spd.x = -OBJ[i].spd.x;
+                OBJ[i].spd.x = -sx;
                 OBJ[i].rem.x = Fix32::ZERO;
                 OBJ[i].freeze = 2; // PICO-8 freeze=1 doubled for 60fps
                 psfx(17, 0, 2);
             }
             if move_y(i, sy, Collide::Stop) {
-                if OBJ[i].spd.y >= fi(4) {
+                // bounce off the floor using the PRE-collision speed (Collide::Stop
+                // zeroed spd.y, so the tiers below never fired -> snowballs never
+                // bounced, they sat). PICO-8: >=4 -> -2, >=1 -> -1, else 0.
+                if sy >= fi(4) {
                     OBJ[i].spd.y = fi(-2);
                     psfx(17, 0, 2);
-                } else if OBJ[i].spd.y >= fi(1) {
+                } else if sy >= fi(1) {
                     OBJ[i].spd.y = fi(-1);
                     psfx(17, 0, 2);
                 } else {
@@ -1554,8 +1559,21 @@ unsafe fn obj_update(i: usize) {
             }
             let sx = OBJ[i].spd.x;
             let sy = OBJ[i].spd.y;
-            move_x(i, sx, Collide::Stop);
-            move_y(i, sy, Collide::Stop);
+            // A thrown springboard BOUNCES off walls/floor (not a dead stop):
+            // on_collide_x -> speed_x *= -0.2; on_collide_y -> speed_y *= -0.4 when
+            // falling >= 2, plus speed_x *= 0.5 (PICO-8 springboard.on_collide_*).
+            if move_x(i, sx, Collide::Stop) {
+                OBJ[i].spd.x = sx * fx(-0.2);
+                OBJ[i].freeze = 2; // PICO-8 freeze=1 doubled for 60fps
+            }
+            if move_y(i, sy, Collide::Stop) {
+                if sy < Fix32::ZERO {
+                    OBJ[i].spd.y = Fix32::ZERO;
+                } else {
+                    OBJ[i].spd.y = if sy >= fi(2) { sy * fx(-0.4) } else { Fix32::ZERO };
+                    OBJ[i].spd.x = OBJ[i].spd.x * fx(0.5);
+                }
+            }
             // carry the player riding it
             if OBJ[i].link != NONE {
                 let p = OBJ[i].link;
