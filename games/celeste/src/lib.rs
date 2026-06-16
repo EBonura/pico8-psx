@@ -23,6 +23,7 @@ use assets::audio_data::{
 use assets::gfx::GFX_DATA;
 use assets::tilemap::{MAP_W, TILEMAP_DATA, TILE_FLAGS};
 use pico8::backend::{self, Cart};
+use pico8::pause::{self, Exit, Pause};
 use pico8::sfx::{self, AudioData};
 use psx_gpu::{self as gpu, Resolution, VideoMode, framebuf::FrameBuffer};
 use psx_pad::{button, poll_port1};
@@ -106,6 +107,7 @@ pub fn run() {
     // music keeps PICO-8's hardware tempo even when rendering can't hold 60fps.
     psx_rt::interrupts::install_vblank_counter();
     let mut last_vb = psx_rt::interrupts::vblank_count();
+    let mut prev_start = true; // require a fresh press before the first pause
 
     loop {
         // Quit to the launcher: Select+Start held together.
@@ -113,6 +115,19 @@ pub fn run() {
         if b.is_held(button::SELECT) && b.is_held(button::START) {
             return;
         }
+
+        // Start alone (a fresh press, no Select) opens the pause menu.
+        let start = b.is_held(button::START);
+        if start && !prev_start {
+            if run_pause(&mut fb) {
+                return; // player chose "quit to menu"
+            }
+            last_vb = psx_rt::interrupts::vblank_count(); // don't count paused vblanks
+            prev_start = true; // wait for release before it can pause again
+            continue;
+        }
+        prev_start = start;
+
         game::set_input(pad_mask());
 
         game::update();
@@ -145,6 +160,47 @@ pub fn run() {
     }
 }
 
+/// Pause overlay: freeze the game, show the volume/quit menu, and keep the SPU
+/// advancing so the music plays on at the chosen volume. Returns true if the
+/// player picked "quit to menu". SFX 2 (the cursor blip) is the slider feedback.
+fn run_pause(fb: &mut FrameBuffer) -> bool {
+    let mut menu = Pause::new(2);
+    loop {
+        let b = poll_port1().buttons;
+        let mut m = 0u8;
+        if b.is_held(button::UP) {
+            m |= pause::UP;
+        }
+        if b.is_held(button::DOWN) {
+            m |= pause::DOWN;
+        }
+        if b.is_held(button::LEFT) {
+            m |= pause::LEFT;
+        }
+        if b.is_held(button::RIGHT) {
+            m |= pause::RIGHT;
+        }
+        if b.is_held(button::CROSS) {
+            m |= pause::CONFIRM;
+        }
+        if b.is_held(button::START) {
+            m |= pause::START;
+        }
+        match menu.update(m) {
+            Some(Exit::Resume) => return false,
+            Some(Exit::QuitToMenu) => return true,
+            None => {}
+        }
+
+        fb.clear(0, 0, 0);
+        game::draw(); // frozen game behind the overlay
+        menu.draw();
+        gpu::draw_sync();
+        wait_vblank();
+        fb.swap();
+        sfx::update(); // keep music/SFX alive (and audible at the new volume)
+    }
+}
 
 /// Offline single-SFX test: play `sfx(id)` once then idle, looping. For checking
 /// an isolated SFX's notes/timbre against PICO-8.

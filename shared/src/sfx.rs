@@ -194,6 +194,40 @@ static mut MUSIC_MUTE: u8 = 0;
 static mut WAVEFORM_ADDR: [u32; 8] = [0; 8]; // byte addresses in SPU RAM
 static mut WAVEFORM_ADDR_LONG: [u32; 8] = [0; 8]; // long (8x) tonal wavetables
 
+// User-set master gains (pause-menu volume sliders), in eighths: 8 = unity, 0 =
+// silent. Music plays on voices 0..3 (+ phaser buddies 8..11); SFX on voices
+// 4..7 (+ buddies 12..15). Every per-voice volume write goes through `apply_vol`,
+// which scales by the gain for that voice's group, so the sliders affect the two
+// busses independently without touching the per-note mix.
+static mut MUSIC_GAIN: u16 = 8;
+static mut SFX_GAIN: u16 = 8;
+
+/// Write voice `v`'s SPU volume (same L/R), scaled by its group's master gain.
+/// `v` may be a phaser buddy (v+8); `v & 7` folds buddies back onto their owner,
+/// and voices 0..3 are music, 4..7 are SFX.
+unsafe fn apply_vol(v: usize, vol: i16) {
+    let gain = if (v & 7) < SFX_VOICE_BASE { MUSIC_GAIN } else { SFX_GAIN } as i32;
+    let scaled = (vol as i32 * gain / 8) as i16;
+    Voice::new(v as u8).set_volume(Volume(scaled), Volume(scaled));
+}
+
+/// Set the master volume for the music bus (voices 0..3). `eighths` 0..=8.
+pub fn set_music_volume(eighths: u16) {
+    unsafe { MUSIC_GAIN = eighths.min(8) }
+}
+/// Set the master volume for the SFX bus (voices 4..7). `eighths` 0..=8.
+pub fn set_sfx_volume(eighths: u16) {
+    unsafe { SFX_GAIN = eighths.min(8) }
+}
+/// Current music master volume in eighths (0..=8), for the pause-menu display.
+pub fn music_volume() -> u16 {
+    unsafe { MUSIC_GAIN }
+}
+/// Current SFX master volume in eighths (0..=8), for the pause-menu display.
+pub fn sfx_volume() -> u16 {
+    unsafe { SFX_GAIN }
+}
+
 /// Should a tonal note at `key` use the long (8x) wavetable? Noise (instr 6) never
 /// does. Decided when a voice's start address is set, then cached in
 /// `Channel::long_wt` so pitch bends stay consistent with the loaded sample.
@@ -298,7 +332,7 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
         if cwave == 6 {
             set_noise_freq(played);
         }
-        voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+        apply_vol(v, spu_vol);
         voice.set_pitch(Pitch::raw(spu_pitch));
         // The phaser (instr 7) wavetable is corrupt (phaser isn't periodic at the
         // base period) -- the DIRECT phaser plays a triangle + detuned buddy instead.
@@ -313,7 +347,7 @@ unsafe fn custom_set_voice(v: usize, keyon: bool) {
         if cwave == 6 {
             set_noise_freq(played);
         }
-        voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+        apply_vol(v, spu_vol);
         voice.set_pitch(Pitch::raw(spu_pitch));
     }
 }
@@ -424,7 +458,7 @@ unsafe fn custom_modulate(v: usize) {
             5 => vol = vol * (otot - ot) / otot,
             _ => {}
         }
-        voice.set_volume(Volume(vol as i16), Volume(vol as i16));
+        apply_vol(v, vol as i16);
     }
 }
 
@@ -529,12 +563,12 @@ unsafe fn start_channel_note(v: usize) {
         let spu_pitch = scaled_pitch(get_pitch(key, instr), long);
         if instr == 7 {
             let buddy = Voice::new((v + PHASER_BUDDY) as u8);
-            voice.set_volume(Volume((spu_vol as i32 * 2 / 3) as i16), Volume((spu_vol as i32 * 2 / 3) as i16));
+            apply_vol(v, (spu_vol as i32 * 2 / 3) as i16);
             voice.set_pitch(Pitch::raw(spu_pitch));
-            buddy.set_volume(Volume((spu_vol as i32 / 3) as i16), Volume((spu_vol as i32 / 3) as i16));
+            apply_vol(v + PHASER_BUDDY, (spu_vol as i32 / 3) as i16);
             buddy.set_pitch(Pitch::raw(phaser_buddy_pitch(spu_pitch as i32, key)));
         } else {
-            voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+            apply_vol(v, spu_vol);
             voice.set_pitch(Pitch::raw(spu_pitch));
         }
         return;
@@ -558,19 +592,19 @@ unsafe fn start_channel_note(v: usize) {
         let tri = wt_addr(0, long);
         let va = (spu_vol as i32 * 2 / 3) as i16;
         let vb = (spu_vol as i32 / 3) as i16;
-        voice.set_volume(Volume(va), Volume(va));
+        apply_vol(v, va);
         voice.set_pitch(Pitch::raw(spu_pitch));
         voice.set_start_addr(SpuAddr::new(tri));
         let buddy = v + PHASER_BUDDY;
         let bv = Voice::new(buddy as u8);
-        bv.set_volume(Volume(vb), Volume(vb));
+        apply_vol(buddy, vb);
         bv.set_pitch(Pitch::raw(phaser_buddy_pitch(spu_pitch as i32, sfx_pitch(note))));
         bv.set_start_addr(SpuAddr::new(tri));
         Voice::key_on((1 << v) | (1 << buddy));
         CHANNELS[v].keyed_on = true;
         return;
     }
-    voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+    apply_vol(v, spu_vol);
     voice.set_pitch(Pitch::raw(spu_pitch));
     voice.set_start_addr(SpuAddr::new(addr));
     Voice::key_on(1 << v);
@@ -660,11 +694,10 @@ unsafe fn apply_effects(v: usize) {
     }
     if let Some(vv) = set_vol {
         if phaser {
-            voice.set_volume(Volume((vv * 2 / 3) as i16), Volume((vv * 2 / 3) as i16));
-            Voice::new((v + PHASER_BUDDY) as u8)
-                .set_volume(Volume((vv / 3) as i16), Volume((vv / 3) as i16));
+            apply_vol(v, (vv * 2 / 3) as i16);
+            apply_vol(v + PHASER_BUDDY, (vv / 3) as i16);
         } else {
-            voice.set_volume(Volume(vv as i16), Volume(vv as i16));
+            apply_vol(v, vv as i16);
         }
     }
 }

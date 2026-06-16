@@ -24,6 +24,7 @@ pub mod fixed;
 pub mod font;
 pub mod input;
 pub mod palette;
+pub mod pause;
 pub mod rng;
 pub mod sfx;
 pub mod util;

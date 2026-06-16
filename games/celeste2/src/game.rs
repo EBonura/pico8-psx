@@ -546,12 +546,16 @@ unsafe fn move_x(i: usize, amount: Fix32, c: Collide) -> bool {
 unsafe fn move_y(i: usize, amount: Fix32, c: Collide) -> bool {
     do_move(i, amount * HALF, false, c)
 }
-// One-time position snap (full amount, no 60fps halving).
+// One-time position snap (full amount, no 60fps halving). Uses Collide::None,
+// matching PICO-8's handler-less move_x/move_y: a snap that hits a wall stops
+// advancing but must NOT zero speed_x/speed_y. (Collide::Stop would wipe the
+// velocity -- e.g. wall_jump sets speed_x=3*dir then snaps move_x(-dir*3) INTO
+// the wall, so Stop killed the entire horizontal launch.)
 unsafe fn move_x_exact(i: usize, amount: Fix32) {
-    do_move(i, amount, true, Collide::Stop);
+    do_move(i, amount, true, Collide::None);
 }
 unsafe fn move_y_exact(i: usize, amount: Fix32) {
-    do_move(i, amount, false, Collide::Stop);
+    do_move(i, amount, false, Collide::None);
 }
 
 unsafe fn do_move(i: usize, amount: Fix32, horiz: bool, c: Collide) -> bool {
