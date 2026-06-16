@@ -2049,11 +2049,8 @@ unsafe fn draw_columns(lv: &LevelMeta) {
     while x < lv.width {
         let tx = (x * 8 + par) as i16;
         let w = ((x % 2) * 8 + 8) as i16;
-        let mut sx = tx;
-        while sx < tx + w {
-            backend::line(sx, 0, sx, y1, lv.columns);
-            sx += 4;
-        }
+        // PICO-8: fillp(sparse dots) rectfill(tx, 0, tx+w, height*8, columns)
+        backend::fillp_rect(tx, 0, tx + w, y1, lv.columns, backend::FILLP_COLUMNS);
         x += 1 + x % 7;
     }
 }
@@ -2338,18 +2335,10 @@ unsafe fn draw_object(i: usize) {
             if n >= 0 {
                 backend::spr(n, x, y, o.flip_x, o.flip_y);
             }
-            // "about to break" crack: PICO-8 dithers the tile; approximate with a
-            // coarse colour-1 checker (timer 2 doubled to 4 for 60fps).
+            // "about to break" crack: PICO-8 dithers the tile in colour 1 (timer 2
+            // doubled to 4 for 60fps).
             if o.breaking && o.timer > 4 {
-                let mut dy = 0i16;
-                while dy < 8 {
-                    let mut dx = ((dy / 2) % 2) * 2;
-                    while dx < 8 {
-                        backend::rectfill(x + dx, y + dy, x + dx + 1, y + dy + 1, 1);
-                        dx += 4;
-                    }
-                    dy += 2;
-                }
+                backend::fillp_rect(x, y, x + 7, y + 7, 1, backend::FILLP_CRUMBLE);
             }
         }
         _ => {

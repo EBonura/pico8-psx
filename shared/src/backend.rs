@@ -15,6 +15,7 @@
 
 use crate::font::FONT_DATA;
 use crate::palette::{PICO8_CLUT, PICO8_RGB, TEXT_CLUTS};
+use psx_gpu::material::{TextureMaterial, TextureWindow};
 use psx_gpu::{self as gpu};
 use psx_hw::gpu::{pack_color, pack_texcoord, pack_vertex, pack_xy};
 use psx_io::gpu::{wait_cmd_ready, write_gp0};
@@ -42,6 +43,8 @@ const GFX_TPAGE: Tpage = Tpage::new(640, 0, TexDepth::Bit4); // 256x256 4bpp -> 
 const FONT_TPAGE: Tpage = Tpage::new(704, 0, TexDepth::Bit4); // 256x170 4bpp
 const SPRITE_CLUT: Clut = Clut::new(0, 480); // 16 entries, below the framebuffers
 const TEXT_CLUT: Clut = Clut::new(0, 481); // one row, re-uploaded per print colour
+const FILLP_TPAGE: Tpage = Tpage::new(768, 0, TexDepth::Bit4); // 8x8 dither patterns side-by-side
+const FILL_CLUT: Clut = Clut::new(0, 482); // 2 entries (0 = transparent, 1 = fill colour)
 
 // ---- Screen transform ----
 const SCALE: i16 = 2;
@@ -68,6 +71,7 @@ pub fn upload_assets(cart: Cart) {
     upload_16bpp(VramRect::new(GFX_TPAGE.x(), GFX_TPAGE.y(), 64, 256), cart.gfx);
     upload_16bpp(VramRect::new(FONT_TPAGE.x(), FONT_TPAGE.y(), 64, 170), &FONT_DATA);
     upload_16bpp(VramRect::new(SPRITE_CLUT.x(), SPRITE_CLUT.y(), 16, 1), &PICO8_CLUT);
+    upload_fillp();
 }
 
 /// Upload just the universal PICO-8 font (and reset the colour remap), so a
@@ -217,6 +221,104 @@ pub fn rectfill(x: i16, y: i16, x2: i16, y2: i16, c: i32) {
     let y1 = sy(by + 1);
     let (r, g, b) = rgb(c);
     gpu::draw_quad_flat([(x0, y0), (x1, y0), (x0, y1), (x1, y1)], r, g, b);
+}
+
+// ---- fillp (PICO-8 fill patterns / dither) -------------------------------
+// PICO-8's `fillp` overlays a screen-fixed 4x4 dither over fills. The PS1 has no
+// such mode, so we tile a tiny 8x8 pattern (2x2 copies of the 4x4) via the GPU's
+// texture window: the pattern's set texels draw the fill colour, unset texels map
+// to a transparent CLUT entry so the background shows through. UVs follow screen
+// position, so the pattern stays screen-locked as the camera scrolls, like the cart.
+
+/// fillp pattern ids (index into FILLP_VALUES; the cart's 16-bit 4x4 patterns).
+pub const FILLP_COLUMNS: usize = 0; // sparse dots (background pillars)
+pub const FILLP_FOG: usize = 1; // 50% checkerboard (fog)
+pub const FILLP_CRUMBLE: usize = 2; // checkerboard, opposite phase (crumble crack)
+const FILLP_VALUES: [u16; 3] =
+    [0b0000_1000_0000_0010, 0b0101_1010_0101_1010, 0b1010_0101_1010_0101];
+
+/// Build an 8x8 4bpp tile from a cart 4x4 fillp pattern: texel 1 where the bit is
+/// set (drawn), 0 elsewhere (transparent). 16 halfwords (2 wide x 8 tall).
+fn build_pattern(p: u16) -> [u16; 16] {
+    let mut out = [0u16; 16];
+    let mut y = 0usize;
+    while y < 8 {
+        let mut hw = [0u16; 2];
+        let mut x = 0usize;
+        while x < 8 {
+            let bit = 15 - ((y % 4) * 4 + (x % 4));
+            if (p >> bit) & 1 != 0 {
+                hw[x / 4] |= 1u16 << ((x % 4) * 4);
+            }
+            x += 1;
+        }
+        out[y * 2] = hw[0];
+        out[y * 2 + 1] = hw[1];
+        y += 1;
+    }
+    out
+}
+
+/// Upload the dither patterns side-by-side in FILLP_TPAGE (pattern i at U = i*8).
+/// Called from [`upload_assets`]; re-run per game boot since VRAM is shared.
+fn upload_fillp() {
+    let mut i = 0;
+    while i < FILLP_VALUES.len() {
+        let tile = build_pattern(FILLP_VALUES[i]);
+        upload_16bpp(VramRect::new(FILLP_TPAGE.x() + (i as u16) * 2, FILLP_TPAGE.y(), 2, 8), &tile);
+        i += 1;
+    }
+}
+
+/// Set the GPU texture window (GP0 0xE2). Masks/offsets are in 8-pixel units.
+#[inline]
+unsafe fn set_tex_window(mask_x: u32, mask_y: u32, off_x: u32, off_y: u32) {
+    wait_cmd_ready();
+    write_gp0(
+        0xE200_0000
+            | (mask_x & 0x1F)
+            | ((mask_y & 0x1F) << 5)
+            | ((off_x & 0x1F) << 10)
+            | ((off_y & 0x1F) << 15),
+    );
+}
+
+/// PICO-8 `fillp(pattern) rectfill(x0,y0,x1,y1,c)`: a dithered rectangle. The
+/// pattern is screen-fixed, so the rect is clamped to the visible camera window
+/// and the pattern phase follows screen position. `pattern` is one of FILLP_*.
+pub fn fillp_rect(x0: i16, y0: i16, x1: i16, y1: i16, c: i32, pattern: usize) {
+    let (lx0, lx1) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+    let (ly0, ly1) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+    unsafe {
+        // clamp to the 128px camera window (fillp is screen-space)
+        let lx = lx0.max(CAM_X);
+        let rx = (lx1 + 1).min(CAM_X + 128);
+        let ty = ly0.max(CAM_Y);
+        let by = (ly1 + 1).min(CAM_Y + 128);
+        if rx <= lx || by <= ty {
+            return;
+        }
+        // fill CLUT[1] = colour (through pal); entry 0 stays transparent (0x0000)
+        let col = PICO8_CLUT[(PAL[(c as usize) & 15] as usize) & 15];
+        upload_16bpp(VramRect::new(FILL_CLUT.x(), FILL_CLUT.y(), 2, 1), &[0u16, col]);
+        FILLP_TPAGE.apply_as_draw_mode(); // GP0 0x2C polys take the draw-mode tpage
+        let (u0, v0) = ((lx - CAM_X) as u8, (ty - CAM_Y) as u8);
+        let (u1, v1) = ((rx - CAM_X) as u8, (by - CAM_Y) as u8);
+        let verts = [(sx(lx), sy(ty)), (sx(rx), sy(ty)), (sx(lx), sy(by)), (sx(rx), sy(by))];
+        let uvs = [(u0, v0), (u1, v0), (u0, v1), (u1, v1)];
+        // The window must live in the material -- draw_quad_textured_material emits
+        // it itself, overwriting any standalone GP0 0xE2 we'd set. 8x8 tile at the
+        // pattern's UV (pattern * 8).
+        let win = TextureWindow::power_of_two_tile((pattern as u8) * 8, 0, 8, 8);
+        let mat = TextureMaterial::opaque(
+            FILL_CLUT.uv_clut_word(),
+            FILLP_TPAGE.uv_tpage_word(0),
+            (0x80, 0x80, 0x80),
+        )
+        .with_texture_window(win);
+        gpu::draw_quad_textured_material(verts, uvs, mat);
+        set_tex_window(0, 0, 0, 0); // reset the window so sprites/map sample fully
+    }
 }
 
 /// PICO-8 `line(x,y,x2,y2,c)`.
