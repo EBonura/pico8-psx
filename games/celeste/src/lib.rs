@@ -73,6 +73,9 @@ fn pad_mask() -> u8 {
     if b.is_held(button::CIRCLE) {
         mask |= 1 << 5;
     }
+    if b.is_held(button::TRIANGLE) {
+        mask |= 1 << 6; // debug fly (only acts when fly mode is on)
+    }
     mask
 }
 
@@ -164,7 +167,7 @@ pub fn run() {
 /// advancing so the music plays on at the chosen volume. Returns true if the
 /// player picked "quit to menu". SFX 2 (the cursor blip) is the slider feedback.
 fn run_pause(fb: &mut FrameBuffer) -> bool {
-    let mut menu = Pause::new(2, false); // no fly row (celeste1 has no fly path)
+    let mut menu = Pause::new(2, true); // show the debug FLY row
     loop {
         let b = poll_port1().buttons;
         let mut m = 0u8;

@@ -8,6 +8,7 @@
 
 use core::ptr::addr_of_mut;
 use pico8::backend;
+use pico8::debug;
 use pico8::fixed::{fx, Fix32};
 use pico8::rng;
 use pico8::sfx;
@@ -27,6 +28,7 @@ const K_UP: i32 = 2;
 const K_DOWN: i32 = 3;
 const K_JUMP: i32 = 4;
 const K_DASH: i32 = 5;
+const K_FLY: i32 = 6; // debug: hold to fly when debug::fly_enabled()
 
 pub fn set_input(mask: u8) {
     pico8::input::set_buttons(mask);
@@ -623,6 +625,31 @@ unsafe fn player_update(thisp: *mut Obj) {
         return;
     }
     let mut this = thisp;
+
+    // DEBUG fly mode: hold Fly (Triangle) to drift freely with the d-pad -- no
+    // gravity, collision, spikes, fruit, or room transition. Releasing it drops
+    // straight back into normal physics (so flying to a room edge then letting go
+    // walks into the next room as usual).
+    if debug::fly_enabled() && p8btn(K_FLY) {
+        let sp = fi(3);
+        if p8btn(K_LEFT) {
+            (*this).x -= sp;
+            (*this).flip_x = true;
+        }
+        if p8btn(K_RIGHT) {
+            (*this).x += sp;
+            (*this).flip_x = false;
+        }
+        if p8btn(K_UP) {
+            (*this).y -= sp;
+        }
+        if p8btn(K_DOWN) {
+            (*this).y += sp;
+        }
+        (*this).spd = VZERO;
+        (*this).rem = VZERO;
+        return;
+    }
     let input = if p8btn(K_RIGHT) {
         1
     } else if p8btn(K_LEFT) {
