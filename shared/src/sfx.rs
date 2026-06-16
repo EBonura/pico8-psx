@@ -157,6 +157,8 @@ struct Channel {
     note_pitch: i32,  // the main note's pitch (custom pitch is relative to this)
     note_vol: i32,    // the main note's volume 0..7 (scales the custom envelope)
     long_wt: bool,    // this voice loaded the long (8x) wavetable -> pitches use << 3
+    playing_instr: i32, // plain-oscillator instrument currently sounding (-1 = none/
+                        // custom/noise) -- lets a continuing note avoid re-triggering.
 }
 const CH0: Channel = Channel {
     sfx_id: -1,
@@ -172,6 +174,7 @@ const CH0: Channel = Channel {
     note_pitch: 0,
     note_vol: 0,
     long_wt: false,
+    playing_instr: -1,
 };
 
 static mut AUDIO: AudioData = EMPTY_AUDIO;
@@ -474,6 +477,7 @@ unsafe fn start_channel_note(v: usize) {
     if vol == 0 {
         voice_key_off(v);
         CHANNELS[v].custom_k = -1;
+        CHANNELS[v].playing_instr = -1;
         return;
     }
     let instr = sfx_instr(note);
@@ -485,6 +489,7 @@ unsafe fn start_channel_note(v: usize) {
         CHANNELS[v].vibrato_phase = 0;
         CHANNELS[v].note_pitch = sfx_pitch(note);
         CHANNELS[v].note_vol = vol;
+        CHANNELS[v].playing_instr = -1;
         voice_key_off(v);
         custom_set_voice(v, true);
         return;
@@ -503,7 +508,31 @@ unsafe fn start_channel_note(v: usize) {
     };
     let key = sfx_pitch(note);
     let long = uses_long(key, instr);
+    let voice = Voice::new(v as u8);
+
+    // CONTINUE without re-triggering when this voice already sounds the SAME
+    // instrument on the SAME wavetable: just update pitch + volume so the sample
+    // keeps looping with continuous phase, like PICO-8's oscillator. Re-keying
+    // every note (voice_key_off cuts to silence, key_on restarts) was a per-note
+    // CLICK -- audible as cracking on repeated/looped notes (celeste2 sfx1/sfx2).
+    // Noise (instr 6) is excluded: each drum hit wants a fresh attack.
+    if ch.keyed_on && ch.playing_instr == instr && ch.long_wt == long && instr != 6 {
+        let spu_pitch = scaled_pitch(get_pitch(key, instr), long);
+        if instr == 7 {
+            let buddy = Voice::new((v + PHASER_BUDDY) as u8);
+            voice.set_volume(Volume((spu_vol as i32 * 2 / 3) as i16), Volume((spu_vol as i32 * 2 / 3) as i16));
+            voice.set_pitch(Pitch::raw(spu_pitch));
+            buddy.set_volume(Volume((spu_vol as i32 / 3) as i16), Volume((spu_vol as i32 / 3) as i16));
+            buddy.set_pitch(Pitch::raw(phaser_buddy_pitch(spu_pitch as i32, key)));
+        } else {
+            voice.set_volume(Volume(spu_vol), Volume(spu_vol));
+            voice.set_pitch(Pitch::raw(spu_pitch));
+        }
+        return;
+    }
+
     CHANNELS[v].long_wt = long;
+    CHANNELS[v].playing_instr = if instr == 6 { -1 } else { instr };
     let spu_pitch = scaled_pitch(get_pitch(key, instr), long);
     let addr = wt_addr(instr, long);
     voice_key_off(v);
@@ -512,7 +541,6 @@ unsafe fn start_channel_note(v: usize) {
     if instr == 6 {
         set_noise_freq(sfx_pitch(note));
     }
-    let voice = Voice::new(v as u8);
     if instr == 7 {
         // Phaser = two triangles (instrument 0) a hair apart (109/110), summed 2:1.
         // PICO-8's phaser is triangle-like (fundamental + odd harmonics) with the
