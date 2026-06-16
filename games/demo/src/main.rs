@@ -23,10 +23,16 @@ use assets::cover_celeste::COVER_CELESTE;
 use assets::cover_celeste2::COVER_CELESTE2;
 use assets::palette::PICO8_CLUT;
 
+use pico8::sfx;
 use psx_font::{fonts::BASIC, FontAtlas};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
 use psx_vram::{upload_16bpp, Clut, TexDepth, Tpage, VramRect};
+
+// Menu sound effects, borrowed from Celeste's bank (see celeste::AUDIO): sfx 2 is
+// a crisp 0.1s blip for moving the cursor, sfx 3 the 0.4s dash "whoosh" for launch.
+const MENU_MOVE: i32 = 2;
+const MENU_SELECT: i32 = 3;
 
 // ---- VRAM layout -----------------------------------------------------
 // The two 320x240 framebuffers stack vertically (x 0..320, y 0..240 and
@@ -86,6 +92,7 @@ fn show_menu() -> usize {
     gpu::set_draw_offset(0, 0);
 
     let font = upload_menu_vram();
+    sfx::init(celeste::AUDIO); // menu blips run off Celeste's sound bank
 
     let mut sel: usize = 0;
     let mut prev = ButtonState::from_bits(0);
@@ -94,13 +101,24 @@ fn show_menu() -> usize {
         let b = poll_port1().buttons;
         let pressed = |m: u16| b.is_held(m) && !prev.is_held(m);
 
+        let old_sel = sel;
         if pressed(button::LEFT) {
             sel = 0;
         }
         if pressed(button::RIGHT) {
             sel = 1;
         }
+        if sel != old_sel {
+            sfx::play(MENU_MOVE); // cursor moved
+        }
         if pressed(button::CROSS) || pressed(button::START) {
+            // Play the launch blip and hold a few frames so it's heard before the
+            // game boots and clobbers the SPU.
+            sfx::play(MENU_SELECT);
+            for _ in 0..18 {
+                sfx::update();
+                wait_vblank();
+            }
             return sel;
         }
         prev = b;
@@ -146,8 +164,12 @@ fn show_menu() -> usize {
         font.draw_text(CENTER2 - text_half(&font, "CELESTE 2"), 166, "CELESTE 2", l1);
 
         let hint = "D-PAD  SELECT     X  PLAY";
-        font.draw_text(SCREEN_CX - text_half(&font, hint), 212, hint, (0x60, 0x60, 0x60));
+        font.draw_text(SCREEN_CX - text_half(&font, hint), 208, hint, (0x60, 0x60, 0x60));
 
+        let built = "BUILT WITH PSOXIDE";
+        font.draw_text(SCREEN_CX - text_half(&font, built), 224, built, (0x40, 0x48, 0x58));
+
+        sfx::update(); // advance the SPU sequencer so menu blips play out
         gpu::draw_sync();
         wait_vblank();
         fb.swap();

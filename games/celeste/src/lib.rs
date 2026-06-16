@@ -35,8 +35,9 @@ const CART: Cart = Cart {
     map_w: MAP_W,
 };
 
-/// Celeste's PICO-8 sound data (42 music patterns).
-const AUDIO: AudioData = AudioData {
+/// Celeste's PICO-8 sound data (42 music patterns). Public so the demo launcher
+/// can reuse it as the menu's sound bank (cursor-move / select blips).
+pub const AUDIO: AudioData = AudioData {
     waveform_adpcm: &WAVEFORM_ADPCM,
     waveform_offset: &WAVEFORM_OFFSET,
     waveform_adpcm_long: &WAVEFORM_ADPCM_LONG,

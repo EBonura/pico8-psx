@@ -34,6 +34,7 @@ version = "0.1.0"
 dependencies = [
  "celeste",
  "celeste2",
+ "pico8",
  "psx-font",
  "psx-gpu",
  "psx-pad",

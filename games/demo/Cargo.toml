@@ -28,6 +28,10 @@ lto           = "thin"
 celeste  = { path = "../celeste" }
 celeste2 = { path = "../celeste2" }
 
+# Shared PICO-8 runtime, for the menu's sound effects (sfx::init/play/update),
+# driven off celeste's sound bank (celeste::AUDIO).
+pico8 = { path = "../../shared" }
+
 # PSoXide SDK, pulled from the pinned submodule via path deps.
 psx-rt   = { path = "../../third_party/PSoXide/sdk/crates/psx-rt" }
 psx-gpu  = { path = "../../third_party/PSoXide/sdk/crates/psx-gpu" }
