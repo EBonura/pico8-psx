@@ -482,16 +482,25 @@ unsafe fn start_channel_note(v: usize) {
     }
     let instr = sfx_instr(note);
     if sfx_is_custom(note) {
-        // Custom instrument: play SFX `instr` as a macro under this note.
+        // Custom instrument: play SFX `instr` as a macro under this note. A HELD note
+        // (same instrument + same pitch as the one playing -- e.g. the tilt bass at a
+        // constant outer pitch) keeps the macro running so it doesn't re-key-click
+        // every row; PICO-8 likewise sustains a held custom note and only re-attacks
+        // when the note changes.
+        let held = ch.keyed_on && ch.custom_k == instr && ch.note_pitch == sfx_pitch(note);
         CHANNELS[v].custom_k = instr;
-        CHANNELS[v].custom_pos = 0;
-        CHANNELS[v].custom_tick = 0;
-        CHANNELS[v].vibrato_phase = 0;
         CHANNELS[v].note_pitch = sfx_pitch(note);
         CHANNELS[v].note_vol = vol;
         CHANNELS[v].playing_instr = -1;
-        voice_key_off(v);
-        custom_set_voice(v, true);
+        if held {
+            custom_set_voice(v, false); // update vol/pitch only, no re-trigger
+        } else {
+            CHANNELS[v].custom_pos = 0;
+            CHANNELS[v].custom_tick = 0;
+            CHANNELS[v].vibrato_phase = 0;
+            voice_key_off(v);
+            custom_set_voice(v, true);
+        }
         return;
     }
     CHANNELS[v].custom_k = -1;
