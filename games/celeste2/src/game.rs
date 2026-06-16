@@ -1539,11 +1539,25 @@ unsafe fn player_draw(i: usize) {
             let ang = t * fi(4) + fi(k) / fi(16);
             let s = ang.sin();
             let c = ang.cos();
-            let x0 = (o.x + s * fi(16)).to_int() as i16;
-            let y0 = (ty + c * fi(16)).to_int() as i16;
-            let x1 = (o.x + s * fi(40)).to_int() as i16;
-            let y1 = (ty + c * fi(40)).to_int() as i16;
-            backend::line(x0, y0, x1, y1, 7);
+            // The cart draws each ray as a 1px line, but GP0 line primitives are
+            // dropped by hardware-accelerated PS1 renderers (the rays "go missing").
+            // Draw a thin quad instead: the r=16..40 ray, offset +/- half a pixel
+            // along its perpendicular (c,-s). 1px wide in 128-space = 2px on screen,
+            // a faithful 2x of the cart's 1px line.
+            let (pxo, pyo) = (c * fx(0.5), -s * fx(0.5));
+            let ix = o.x + s * fi(16);
+            let iy = ty + c * fi(16);
+            let ox = o.x + s * fi(40);
+            let oy = ty + c * fi(40);
+            backend::quad(
+                [
+                    ((ix + pxo).to_int() as i16, (iy + pyo).to_int() as i16),
+                    ((ox + pxo).to_int() as i16, (oy + pyo).to_int() as i16),
+                    ((ix - pxo).to_int() as i16, (iy - pyo).to_int() as i16),
+                    ((ox - pxo).to_int() as i16, (oy - pyo).to_int() as i16),
+                ],
+                7,
+            );
         }
     }
 }

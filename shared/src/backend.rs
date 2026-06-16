@@ -370,6 +370,25 @@ pub fn line(x: i16, y: i16, x2: i16, y2: i16, c: i32) {
     gpu::draw_line_mono(sx(x), sy(y), sx(x2), sy(y2), r, g, b);
 }
 
+/// Flat-filled quad with arbitrary corners, in PICO-8 128-space. Corner order is a
+/// strip (v0,v1,v2,v3), same as `rectfill`. Use for diagonal shapes that GP0 lines
+/// render unreliably on hardware-accelerated PS1 emulators (e.g. the grapple-pickup
+/// rays drawn as thin quads).
+pub fn quad(p: [(i16, i16); 4], c: i32) {
+    let (r, g, b) = rgb(c);
+    gpu::draw_quad_flat(
+        [
+            (sx(p[0].0), sy(p[0].1)),
+            (sx(p[1].0), sy(p[1].1)),
+            (sx(p[2].0), sy(p[2].1)),
+            (sx(p[3].0), sy(p[3].1)),
+        ],
+        r,
+        g,
+        b,
+    );
+}
+
 /// PICO-8 `circfill(x,y,r,c)` -- one 1px span per row, drawn symmetrically about
 /// the centre. `dx` is tracked monotonically downward as `dy` grows (it only ever
 /// decreases), so the total span work is O(r), not the naive O(r^2). This is hot
