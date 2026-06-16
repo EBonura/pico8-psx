@@ -1,10 +1,14 @@
 //! pico8-psx demo disc -- the headline artifact.
 //!
-//! One bootable PS1 image that opens to a cover menu showing the real
-//! PICO-8 cart labels for each demade game; pick one with the D-pad and
-//! press X to launch it. Each game is linked in as a library and exposes
-//! `run()`, which boots the game and returns when the player holds
-//! Select+Start -- dropping back here to the menu.
+//! Boot flow: a fading Bonnie Studios intro (logo + "Built with PSoXIDE") ->
+//! a cover menu showing the real PICO-8 cart labels for each demade game. Pick
+//! one with the D-pad and press X to launch it, or press Select for a scrolling
+//! credits screen. Each game is linked in as a library and exposes `run()`,
+//! which boots the game and returns when the player holds Select+Start --
+//! dropping back here to the menu.
+//!
+//! The menu uses psx-font's BASIC atlas; the intro/credits use the shared
+//! PICO-8 font (`pico8::backend`).
 //!
 //! Rendering: the 128x128 cart labels live in their own off-screen 4bpp
 //! tpages (x >= 768, clear of the framebuffers and the games' own VRAM)
@@ -19,11 +23,12 @@ extern crate psx_rt;
 
 mod assets;
 
+use assets::cover_bonnie::COVER_BONNIE;
 use assets::cover_celeste::COVER_CELESTE;
 use assets::cover_celeste2::COVER_CELESTE2;
 use assets::palette::PICO8_CLUT;
 
-use pico8::sfx;
+use pico8::{backend, sfx};
 use psx_font::{fonts::BASIC, FontAtlas};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
@@ -48,8 +53,12 @@ const MENU_SELECT: i32 = 3;
 const FONT_TPAGE: Tpage = Tpage::new(320, 0, TexDepth::Bit4); // reserves x 320..576
 const COVER1_TPAGE: Tpage = Tpage::new(768, 0, TexDepth::Bit4); // celeste, x 768..800
 const COVER2_TPAGE: Tpage = Tpage::new(832, 0, TexDepth::Bit4); // celeste2, x 832..864
+const BONNIE_TPAGE: Tpage = Tpage::new(896, 0, TexDepth::Bit4); // intro logo, x 896..928
 const FONT_CLUT: Clut = Clut::new(320, 256); // psx-font's 2-entry CLUT
 const COVER_CLUT: Clut = Clut::new(768, 256); // 16 entries, opaque-black variant
+
+// The intro/credits screens render text in the shared PICO-8 font (pico8::backend,
+// FONT tpage at x=704, clear of the covers) -- coordinates are PICO-8 128-space.
 
 // ---- Menu geometry (320x240 screen) ----------------------------------
 const COVER_SRC: u8 = 128; // source label is 128x128
@@ -73,18 +82,181 @@ fn wait_vblank() {
 #[no_mangle]
 fn main() {
     psx_rt::interrupts::install_vblank_counter();
+    show_intro(); // Bonnie Studios logo fade -> menu (once, on boot)
     loop {
         match show_menu() {
             0 => celeste::run(),
-            _ => celeste2::run(),
+            1 => celeste2::run(),
+            _ => show_credits(),
         }
-        // The game clobbered VRAM and left the GPU in its own mode; the
+        // The game/credits clobbered VRAM and left the GPU in its own mode; the
         // next show_menu() re-inits and re-uploads everything.
     }
 }
 
-/// Show the cover menu and block until the player launches a game.
-/// Returns the chosen game index (0 = Celeste, 1 = Celeste 2).
+/// Boot intro: fade the Bonnie Studios logo (with "BUILT WITH PSoXIDE") in, hold,
+/// fade out, then return to the menu. Any face button skips it.
+fn show_intro() {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    let mut fb = FrameBuffer::new(320, 240);
+    gpu::set_draw_area(0, 0, 319, 239);
+    gpu::set_draw_offset(0, 0);
+
+    upload_16bpp(VramRect::new(BONNIE_TPAGE.x(), BONNIE_TPAGE.y(), 32, 128), &COVER_BONNIE);
+    upload_cover_clut();
+    backend::upload_font();
+
+    const FADE_IN: i32 = 32;
+    const HOLD: i32 = 74;
+    const TOTAL: i32 = 150;
+    const FADE_OUT: i32 = TOTAL - FADE_IN - HOLD;
+
+    let any = |b: ButtonState| {
+        b.is_held(button::CROSS) || b.is_held(button::CIRCLE) || b.is_held(button::START)
+    };
+    let mut prev = poll_port1().buttons;
+    let mut frame = 0i32;
+    while frame < TOTAL {
+        let b = poll_port1().buttons;
+        if frame > 8 && any(b) && !any(prev) {
+            break; // fresh press skips
+        }
+        prev = b;
+
+        // logo brightness 0..0x80 over fade-in / hold / fade-out
+        let lvl = if frame < FADE_IN {
+            frame * 0x80 / FADE_IN
+        } else if frame < FADE_IN + HOLD {
+            0x80
+        } else {
+            (TOTAL - frame) * 0x80 / FADE_OUT
+        }
+        .clamp(0, 0x80) as u8;
+
+        fb.clear(0, 0, 0);
+        draw_cover(BONNIE_TPAGE, 112, 38, (lvl, lvl, lvl));
+        // tagline below, faded through PICO-8 greys (0->1->13->6) as the logo rises.
+        backend::camera(0, 0);
+        let c = if lvl < 0x18 {
+            0
+        } else if lvl < 0x40 {
+            1
+        } else if lvl < 0x68 {
+            13
+        } else {
+            6
+        };
+        pprint_center(b"built with psoxide", 80, c);
+
+        gpu::draw_sync();
+        wait_vblank();
+        fb.swap();
+        frame += 1;
+    }
+}
+
+/// Scrolling credits screen (reached with Select from the menu). Renders in the
+/// PICO-8 font; any face button returns to the menu.
+fn show_credits() {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    let mut fb = FrameBuffer::new(320, 240);
+    gpu::set_draw_area(0, 0, 319, 239);
+    gpu::set_draw_offset(0, 0);
+    backend::upload_font();
+    sfx::init(celeste::AUDIO);
+
+    // (text, PICO-8 colour). Empty lines are spacers. Rendered all-caps by the font.
+    const LINES: &[(&[u8], i32)] = &[
+        (b"celeste classic collection", 10),
+        (b"", 0),
+        (b"ps1 port by", 6),
+        (b"bonnie studios", 7),
+        (b"bonnie-studios.itch.io", 12),
+        (b"", 0),
+        (b"built with psoxide", 6),
+        (b"github.com/ebonura/psoxide", 12),
+        (b"", 0),
+        (b"-- original games --", 5),
+        (b"", 0),
+        (b"celeste classic   2016", 7),
+        (b"maddy thorson  noel berry", 6),
+        (b"", 0),
+        (b"celeste 2 lani's trek  2021", 7),
+        (b"maddy thorson  noel berry", 6),
+        (b"music   lena raine", 6),
+        (b"", 0),
+        (b"made with pico-8", 7),
+        (b"by lexaloffle games", 6),
+        (b"lexaloffle.com/pico-8.php", 12),
+        (b"", 0),
+        (b"unofficial fan port", 5),
+        (b"free forever", 5),
+        (b"all rights to the original", 5),
+        (b"creators", 5),
+    ];
+    const LINE_H: i16 = 7;
+    let content_h = LINES.len() as i16 * LINE_H;
+
+    let any = |b: ButtonState| {
+        b.is_held(button::CROSS) || b.is_held(button::CIRCLE) || b.is_held(button::START)
+    };
+    let mut prev = poll_port1().buttons; // void a button still held from the menu
+    let mut scroll = 0i16;
+    let mut tick = 0u32;
+    loop {
+        let b = poll_port1().buttons;
+        if any(b) && !any(prev) {
+            return; // fresh press exits
+        }
+        prev = b;
+
+        fb.clear(0, 0, 16); // dark navy
+        backend::camera(0, 0);
+        let top = 132 - scroll; // scroll up from below the screen
+        let mut i: i16 = 0;
+        for (txt, col) in LINES {
+            if !txt.is_empty() {
+                let y = top + i * LINE_H;
+                if y >= -7 && y <= 130 {
+                    pprint_center(txt, y, *col);
+                }
+            }
+            i += 1;
+        }
+        // fixed footer over the scroll
+        backend::rectfill(0, 120, 127, 128, 0);
+        pprint_center(b"x  back", 121, 5);
+
+        tick += 1;
+        if tick & 1 == 0 {
+            scroll += 1; // ~0.5px/frame
+        }
+        if scroll > content_h + 134 {
+            scroll = 0; // loop
+        }
+
+        sfx::update();
+        gpu::draw_sync();
+        wait_vblank();
+        fb.swap();
+    }
+}
+
+/// Centre an all-caps string on the 128px PICO-8 screen (4px/char) and print it.
+#[inline]
+fn pprint_center(s: &[u8], y: i16, c: i32) {
+    backend::print(s, 64 - (s.len() as i16) * 2, y, c);
+}
+
+/// Upload the opaque-black PICO-8 CLUT used by the covers + logo.
+fn upload_cover_clut() {
+    let mut clut = PICO8_CLUT;
+    clut[0] = 0x0421; // RGB555 (1,1,1) -- opaque, reads as black
+    upload_16bpp(VramRect::new(COVER_CLUT.x(), COVER_CLUT.y(), 16, 1), &clut);
+}
+
+/// Show the cover menu and block until the player picks something.
+/// Returns 0 = Celeste, 1 = Celeste 2, 2 = credits (Select).
 fn show_menu() -> usize {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
     let mut fb = FrameBuffer::new(320, 240);
@@ -114,6 +286,10 @@ fn show_menu() -> usize {
         }
         if sel != old_sel {
             sfx::play(MENU_MOVE); // cursor moved
+        }
+        if pressed(button::SELECT) {
+            sfx::play(MENU_MOVE);
+            return 2; // open the credits screen
         }
         if pressed(button::CROSS) || pressed(button::START) {
             // Play the launch blip and hold a few frames so it's heard before the
@@ -168,10 +344,10 @@ fn show_menu() -> usize {
         font.draw_text(CENTER2 - text_half(&font, "CELESTE 2"), 166, "CELESTE 2", l1);
 
         let hint = "D-PAD  SELECT     X  PLAY";
-        font.draw_text(SCREEN_CX - text_half(&font, hint), 208, hint, (0x60, 0x60, 0x60));
+        font.draw_text(SCREEN_CX - text_half(&font, hint), 210, hint, (0x60, 0x60, 0x60));
 
-        let built = "BUILT WITH PSOXIDE";
-        font.draw_text(SCREEN_CX - text_half(&font, built), 224, built, (0x40, 0x48, 0x58));
+        let hint2 = "SELECT  CREDITS";
+        font.draw_text(SCREEN_CX - text_half(&font, hint2), 222, hint2, (0x48, 0x48, 0x58));
 
         sfx::update(); // advance the SPU sequencer so menu blips play out
         gpu::draw_sync();
@@ -188,13 +364,9 @@ fn upload_menu_vram() -> FontAtlas {
     upload_16bpp(VramRect::new(COVER1_TPAGE.x(), COVER1_TPAGE.y(), 32, 128), &COVER_CELESTE);
     upload_16bpp(VramRect::new(COVER2_TPAGE.x(), COVER2_TPAGE.y(), 32, 128), &COVER_CELESTE2);
 
-    // The cart labels use PICO-8 colour 0 (black) for their borders. In
-    // VRAM a 4bpp texel whose CLUT entry is 0x0000 is transparent, which
-    // would punch holes in the labels; swap entry 0 for a near-black
-    // opaque value so the covers render solid like the real cart.
-    let mut clut = PICO8_CLUT;
-    clut[0] = 0x0421; // RGB555 (1,1,1) -- opaque, reads as black
-    upload_16bpp(VramRect::new(COVER_CLUT.x(), COVER_CLUT.y(), 16, 1), &clut);
+    // The cart labels use PICO-8 colour 0 (black) for their borders; the opaque-black
+    // CLUT keeps them solid instead of punching transparent holes.
+    upload_cover_clut();
 
     FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT)
 }

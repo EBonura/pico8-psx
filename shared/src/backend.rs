@@ -70,6 +70,15 @@ pub fn upload_assets(cart: Cart) {
     upload_16bpp(VramRect::new(SPRITE_CLUT.x(), SPRITE_CLUT.y(), 16, 1), &PICO8_CLUT);
 }
 
+/// Upload just the universal PICO-8 font (and reset the colour remap), so a
+/// screen with no cart -- e.g. the launcher's intro/credits -- can use [`print`]
+/// for PICO-8-font text. Coordinates are PICO-8 128-space (scaled 2x, centred);
+/// set `camera(0, 0)` first. Call once after `gpu::init`.
+pub fn upload_font() {
+    upload_16bpp(VramRect::new(FONT_TPAGE.x(), FONT_TPAGE.y(), 64, 170), &FONT_DATA);
+    pal_reset();
+}
+
 /// Re-apply the gfx tpage as the current draw mode. GP0 0x64 sprites carry no
 /// tpage word, so this must precede sprite/map draws each frame.
 #[inline]
