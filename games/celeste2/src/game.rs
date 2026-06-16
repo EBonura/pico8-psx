@@ -1502,13 +1502,14 @@ unsafe fn player_draw(i: usize) {
         let ki = fi(k as i32);
         let wob = (ki * fx(0.25) + t).sin() * ki * fx(0.25);
         s.y += ((last.y - s.y) + wob) / fi(4);
-        let dx = s.x - last.x;
-        let dy = s.y - last.y;
-        let dist = (dx * dx + dy * dy).sqrt();
-        if dist > fx(1.5) {
-            s.x = last.x + dx / dist * fx(1.5);
-            s.y = last.y + dy / dist * fx(1.5);
-        }
+        // Keep each segment within ~1.5px of the previous. PICO-8 clamps the
+        // Euclidean distance, but `dx*dx + dy*dy` overflows Fix32 once a segment
+        // ever drifts far (~180px squared > i32), making the clamp silently fail
+        // and leaving the segment stuck off-screen -- which is why the scarf went
+        // missing. Clamp per-axis instead: it can't overflow and always reins a
+        // stray segment straight back in.
+        s.x = last.x + (s.x - last.x).max(fx(-1.5)).min(fx(1.5));
+        s.y = last.y + (s.y - last.y).max(fx(-1.5)).min(fx(1.5));
         SCARF[k - 1] = s;
         let (sx, sy) = (s.x.to_int() as i16, s.y.to_int() as i16);
         backend::rectfill(sx, sy, sx, sy, 10);
