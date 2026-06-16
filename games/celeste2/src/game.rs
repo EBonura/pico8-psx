@@ -533,9 +533,11 @@ unsafe fn check_solid(i: usize, ox: Fix32, oy: Fix32) -> bool {
 // On-collide kind: how the moving object reacts to a wall.
 #[derive(Clone, Copy, PartialEq)]
 enum Collide {
-    None,    // pass through (no stop)
-    Stop,    // zero remainder + speed (base object)
-    Player,  // player corner-correct then stop
+    None,       // pass through (no stop)
+    Stop,       // zero remainder + speed (base object)
+    Player,     // player corner-correct then stop
+    SnowballX,  // snowball: corner-correct over a lip, else hurt, else bounce back
+    PullX,      // grappled-object pull: corner-correct around a corner, else end pull
 }
 
 unsafe fn move_x(i: usize, amount: Fix32, c: Collide) -> bool {
@@ -602,7 +604,34 @@ unsafe fn on_collide(i: usize, horiz: bool, step: i32, c: Collide) -> bool {
             true
         }
         Collide::Player => player_on_collide(i, horiz, step),
+        Collide::SnowballX => snowball_on_collide_x(i),
+        Collide::PullX => pull_on_collide_x(i, step),
     }
+}
+
+/// snowball.on_collide_x: try to slide over a small lip (corner_correct); else lose
+/// 1 HP (and stop if that kills it); else bounce back off the wall. spd.x is still
+/// the pre-collision velocity here, so negating it reverses direction.
+unsafe fn snowball_on_collide_x(i: usize) -> bool {
+    let s = sign(OBJ[i].spd.x).to_int();
+    if corner_correct(i, s, 0, 2, 2, 1, false) {
+        return false; // slid over the lip, keep rolling
+    }
+    if snowball_hurt(i) {
+        return true; // lost its last HP -> destroyed
+    }
+    OBJ[i].spd.x = -OBJ[i].spd.x;
+    OBJ[i].rem.x = Fix32::ZERO;
+    OBJ[i].freeze = 2; // PICO-8 freeze=1 doubled for 60fps
+    psfx(17, 0, 2);
+    true
+}
+
+/// pull_collide_x: a grappled object being pulled corner-corrects around a snag and
+/// keeps coming; only a real wall (corner_correct fails) ends the pull. `step` is
+/// sgn(pull amount) == the Lua sgn(target).
+unsafe fn pull_on_collide_x(i: usize, step: i32) -> bool {
+    !corner_correct(i, step, 0, 4, 2, 0, false)
 }
 
 /// corner_correct (simplified to the cases the player uses): try to nudge
@@ -1197,7 +1226,7 @@ unsafe fn player_update(i: usize) {
                 OBJ[i].state = 0;
             } else {
                 let dir = OBJ[i].grapple_dir;
-                if move_x(obj, fi(-dir * 6), Collide::Stop) {
+                if move_x(obj, fi(-dir * 6), Collide::PullX) {
                     OBJ[i].state = 0;
                     OBJ[i].grapple_retract = true;
                     obj_on_release(obj, dir != 0);
@@ -1519,15 +1548,9 @@ unsafe fn obj_update(i: usize) {
             }
             let sx = OBJ[i].spd.x;
             let sy = OBJ[i].spd.y;
-            // snowball wall bounce: reverse the PRE-collision velocity (Collide::Stop
-            // has already zeroed spd.x, so negating it gave -0 = 0 -> snowballs were
-            // stopping at walls instead of bouncing back. PICO-8: speed_x *= -1).
-            if move_x(i, sx, Collide::Stop) && !snowball_hurt(i) {
-                OBJ[i].spd.x = -sx;
-                OBJ[i].rem.x = Fix32::ZERO;
-                OBJ[i].freeze = 2; // PICO-8 freeze=1 doubled for 60fps
-                psfx(17, 0, 2);
-            }
+            // snowball wall collision (snowball_on_collide_x): corner-correct over a
+            // small lip, else hurt, else bounce back.
+            move_x(i, sx, Collide::SnowballX);
             if move_y(i, sy, Collide::Stop) {
                 // bounce off the floor using the PRE-collision speed (Collide::Stop
                 // zeroed spd.y, so the tiers below never fired -> snowballs never
