@@ -19,6 +19,7 @@ use crate::assets::gfx::GFX_DATA;
 use crate::assets::levels::{LEVELS, LevelMeta};
 use crate::assets::tilemap::TILE_FLAGS;
 use pico8::backend::{self, Cart};
+use pico8::debug;
 use pico8::fixed::{fx, Fix32};
 use pico8::rng;
 use pico8::sfx;
@@ -46,6 +47,7 @@ pub const IN_UP: u8 = 1 << 2;
 pub const IN_DOWN: u8 = 1 << 3;
 pub const IN_JUMP: u8 = 1 << 4;
 pub const IN_GRAPPLE: u8 = 1 << 5;
+pub const IN_FLY: u8 = 1 << 6; // debug: hold to fly when debug::fly_enabled()
 
 // ---- input state (mirrors update_input / consume_*_press) ----
 static mut RAW: u8 = 0;
@@ -1001,6 +1003,32 @@ unsafe fn release_holding(i: usize, obj: usize, sx: Fix32, sy: Fix32, thrown: bo
 }
 
 unsafe fn player_update(i: usize) {
+    // DEBUG fly mode: hold Fly (Triangle) to drift freely with the d-pad -- no
+    // gravity, collision, hazards, object pickups, or state machine. Releasing it
+    // drops straight back into normal physics (boundary/death checks resume), so
+    // flying to a level edge then letting go advances the level as usual.
+    if debug::fly_enabled() && held(IN_FLY) {
+        let sp = fi(3); // px/frame
+        if held(IN_LEFT) {
+            OBJ[i].x -= sp;
+            OBJ[i].facing = -1;
+        }
+        if held(IN_RIGHT) {
+            OBJ[i].x += sp;
+            OBJ[i].facing = 1;
+        }
+        if held(IN_UP) {
+            OBJ[i].y -= sp;
+        }
+        if held(IN_DOWN) {
+            OBJ[i].y += sp;
+        }
+        OBJ[i].spd = VZ;
+        OBJ[i].rem = VZ;
+        OBJ[i].state = 0;
+        return;
+    }
+
     let on_ground = check_solid(i, Fix32::ZERO, fi(1));
     if on_ground {
         OBJ[i].t_jump_grace = 8;

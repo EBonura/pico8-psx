@@ -20,6 +20,7 @@
 #![allow(static_mut_refs)]
 
 pub mod backend;
+pub mod debug;
 pub mod fixed;
 pub mod font;
 pub mod input;

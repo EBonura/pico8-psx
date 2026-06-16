@@ -22,8 +22,7 @@ pub const START: u8 = 1 << 5;
 
 const ROW_SFX: u8 = 0;
 const ROW_MUSIC: u8 = 1;
-const ROW_QUIT: u8 = 2;
-const ROW_COUNT: u8 = 3;
+const ROW_FLY: u8 = 2; // debug fly toggle; present only when `fly` is set
 
 /// Outcome of a paused frame.
 pub enum Exit {
@@ -36,14 +35,23 @@ pub enum Exit {
 pub struct Pause {
     sel: u8,
     prev: u8,
-    blip: i32, // SFX id played when nudging a volume slider, so it's audible
+    blip: i32,  // SFX id played when nudging a volume slider, so it's audible
+    fly: bool,  // show the debug "FLY" row (toggles pico8::debug fly mode)
 }
 
 impl Pause {
     /// `blip` is a short SFX id (from the game's own bank) played on each volume
-    /// nudge so the SFX slider gives audible feedback.
-    pub fn new(blip: i32) -> Self {
-        Pause { sel: ROW_SFX, prev: 0xFF, blip }
+    /// nudge so the SFX slider gives audible feedback. `fly` adds the debug FLY
+    /// row (only games that implement a fly path should pass true).
+    pub fn new(blip: i32, fly: bool) -> Self {
+        Pause { sel: ROW_SFX, prev: 0xFF, blip, fly }
+    }
+
+    fn row_count(&self) -> u8 {
+        if self.fly { 4 } else { 3 }
+    }
+    fn quit_row(&self) -> u8 {
+        self.row_count() - 1
     }
 
     /// Advance the menu one frame given the current control mask. Returns
@@ -52,14 +60,15 @@ impl Pause {
         let pressed = mask & !self.prev; // rising edges only
         self.prev = mask;
 
+        let count = self.row_count();
         if pressed & START != 0 {
             return Some(Exit::Resume);
         }
         if pressed & UP != 0 {
-            self.sel = (self.sel + ROW_COUNT - 1) % ROW_COUNT;
+            self.sel = (self.sel + count - 1) % count;
         }
         if pressed & DOWN != 0 {
-            self.sel = (self.sel + 1) % ROW_COUNT;
+            self.sel = (self.sel + 1) % count;
         }
 
         let dir: i32 = if pressed & RIGHT != 0 {
@@ -69,7 +78,9 @@ impl Pause {
         } else {
             0
         };
-        if dir != 0 {
+        if self.fly && self.sel == ROW_FLY && dir != 0 {
+            crate::debug::set_fly(dir > 0); // right = on, left = off
+        } else if dir != 0 {
             match self.sel {
                 ROW_SFX => {
                     let v = (sfx::sfx_volume() as i32 + dir).clamp(0, 8) as u16;
@@ -84,8 +95,12 @@ impl Pause {
             }
         }
 
-        if pressed & CONFIRM != 0 && self.sel == ROW_QUIT {
-            return Some(Exit::QuitToMenu);
+        if pressed & CONFIRM != 0 {
+            if self.fly && self.sel == ROW_FLY {
+                crate::debug::toggle_fly();
+            } else if self.sel == self.quit_row() {
+                return Some(Exit::QuitToMenu);
+            }
         }
         None
     }
@@ -96,20 +111,31 @@ impl Pause {
         backend::camera(0, 0);
 
         // A framed panel over the (frozen) game: black fill, 1px border, then a
-        // dark inset so the text reads regardless of what's behind.
-        backend::rectfill(17, 29, 110, 97, 7); // border
-        backend::rectfill(18, 30, 109, 96, 0); // black fill
-        backend::rectfill(20, 32, 107, 94, 1); // dark-blue inset
+        // dark inset so the text reads regardless of what's behind. The FLY row
+        // adds one line, so grow the panel when it's shown.
+        let extra: i16 = if self.fly { 12 } else { 0 };
+        backend::rectfill(17, 29, 110, 97 + extra, 7); // border
+        backend::rectfill(18, 30, 109, 96 + extra, 0); // black fill
+        backend::rectfill(20, 32, 107, 94 + extra, 1); // dark-blue inset
 
         print_centered(b"PAUSED", 36, 7);
 
         self.draw_slider(ROW_SFX, b"SFX", sfx::sfx_volume(), 50);
         self.draw_slider(ROW_MUSIC, b"MUSIC", sfx::music_volume(), 62);
 
-        let quit_c = if self.sel == ROW_QUIT { 7 } else { 6 };
-        print_centered(b"QUIT TO MENU", 78, quit_c);
+        let mut y: i16 = 78;
+        if self.fly {
+            let lit = self.sel == ROW_FLY;
+            backend::print(b"FLY", 26, y, if lit { 7 } else { 6 });
+            let on = crate::debug::fly_enabled();
+            backend::print(if on { b"ON" } else { b"OFF" }, 62, y, if on { 10 } else { 5 });
+            y += 12;
+        }
 
-        print_centered(b"START RESUMES", 88, 5);
+        let quit_c = if self.sel == self.quit_row() { 7 } else { 6 };
+        print_centered(b"QUIT TO MENU", y, quit_c);
+
+        print_centered(b"START RESUMES", y + 10, 5);
     }
 
     fn draw_slider(&self, row: u8, label: &[u8], vol: u16, y: i16) {

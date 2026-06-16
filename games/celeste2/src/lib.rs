@@ -114,6 +114,9 @@ pub fn run() {
         if b.is_held(button::CIRCLE) {
             mask |= game::IN_GRAPPLE;
         }
+        if b.is_held(button::TRIANGLE) {
+            mask |= game::IN_FLY; // debug fly (only acts when fly mode is on)
+        }
         game::set_input(mask);
 
         game::update();
@@ -143,7 +146,7 @@ pub fn run() {
 /// advancing so the music plays on at the chosen volume. Returns true if the
 /// player picked "quit to menu". `psfx(7,..)` (jump) is the SFX-slider blip.
 fn run_pause(fb: &mut FrameBuffer) -> bool {
-    let mut menu = Pause::new(7);
+    let mut menu = Pause::new(7, true); // show the debug FLY row
     loop {
         let b = poll_port1().buttons;
         let mut m = 0u8;

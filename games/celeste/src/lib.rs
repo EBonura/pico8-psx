@@ -164,7 +164,7 @@ pub fn run() {
 /// advancing so the music plays on at the chosen volume. Returns true if the
 /// player picked "quit to menu". SFX 2 (the cursor blip) is the slider feedback.
 fn run_pause(fb: &mut FrameBuffer) -> bool {
-    let mut menu = Pause::new(2);
+    let mut menu = Pause::new(2, false); // no fly row (celeste1 has no fly path)
     loop {
         let b = poll_port1().buttons;
         let mut m = 0u8;
