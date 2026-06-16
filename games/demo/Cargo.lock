@@ -46,6 +46,7 @@ dependencies = [
 name = "pico8"
 version = "0.1.0"
 dependencies = [
+ "psx-font",
  "psx-gpu",
  "psx-hw",
  "psx-io",

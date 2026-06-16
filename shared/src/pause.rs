@@ -1,17 +1,20 @@
 //! In-game pause menu (not in the original PICO-8 carts).
 //!
-//! Pressing Start opens an overlay with two volume sliders (SFX / music) and a
-//! "quit to menu" item. The menu is platform-agnostic: it owns only its state,
-//! draws through [`crate::backend`] (rectfill/print), and is driven one frame at
-//! a time by [`Pause::update`] with a 6-bit control mask. The game's own frame
-//! loop keeps drawing the frozen game behind it and advancing the SPU, so the
-//! music plays on and the volume sliders are heard live.
+//! Pressing Start opens an overlay with two volume sliders (SFX / music), a debug
+//! fly toggle, and a "quit to menu" item. The panel/sliders draw through
+//! [`crate::backend`] (PICO-8 128-space rects), but the TEXT is rendered in the
+//! PSoXide BASIC font, deliberately NOT the PICO-8 typeface, so the menu reads as
+//! an add-on rather than part of the original game. Driven one frame at a time by
+//! [`Pause::update`] with a 6-bit control mask; the game's loop keeps drawing the
+//! frozen game behind it and advancing the SPU, so the volume sliders are live.
 //!
 //! Control mask bits (edge-detected internally): 0 up, 1 down, 2 left, 3 right,
 //! 4 confirm (X), 5 start.
 
 use crate::backend;
 use crate::sfx;
+use psx_font::{fonts::BASIC, FontAtlas};
+use psx_vram::{Clut, TexDepth, Tpage};
 
 pub const UP: u8 = 1 << 0;
 pub const DOWN: u8 = 1 << 1;
@@ -24,6 +27,27 @@ const ROW_SFX: u8 = 0;
 const ROW_MUSIC: u8 = 1;
 const ROW_FLY: u8 = 2; // debug fly toggle; present only when `fly` is set
 
+// PSX font VRAM (x320, clear of the framebuffers and the games' own tpages;
+// re-uploaded each pause-open since the game owns VRAM while it runs).
+const FONT_TPAGE: Tpage = Tpage::new(320, 0, TexDepth::Bit4);
+const FONT_CLUT: Clut = Clut::new(320, 256);
+
+// psx-font tints (0x80 = full brightness; the glyphs are white, modulated by this).
+const T_WHITE: (u8, u8, u8) = (0x80, 0x80, 0x80);
+const T_GREY: (u8, u8, u8) = (0x6a, 0x6a, 0x76);
+const T_DIM: (u8, u8, u8) = (0x44, 0x44, 0x52);
+const T_GREEN: (u8, u8, u8) = (0x20, 0x78, 0x38);
+
+// PICO-8 128-space -> screen, matching backend (camera at 0, SCALE 2, OFS 32/-8).
+#[inline]
+fn sx(px: i16) -> i16 {
+    px * 2 + 32
+}
+#[inline]
+fn sy(py: i16) -> i16 {
+    py * 2 - 8
+}
+
 /// Outcome of a paused frame.
 pub enum Exit {
     /// Close the menu and resume the game.
@@ -35,16 +59,19 @@ pub enum Exit {
 pub struct Pause {
     sel: u8,
     prev: u8,
-    blip: i32,  // SFX id played when nudging a volume slider, so it's audible
-    fly: bool,  // show the debug "FLY" row (toggles pico8::debug fly mode)
+    blip: i32,        // SFX id played when nudging a volume slider, so it's audible
+    fly: bool,        // show the debug "FLY" row (toggles pico8::debug fly mode)
+    font: FontAtlas,  // PSX (non-PICO-8) typeface for the menu text
 }
 
 impl Pause {
     /// `blip` is a short SFX id (from the game's own bank) played on each volume
     /// nudge so the SFX slider gives audible feedback. `fly` adds the debug FLY
-    /// row (only games that implement a fly path should pass true).
+    /// row (only games that implement a fly path should pass true). Uploads the
+    /// PSX font to VRAM (call once per pause-open, which is what the games do).
     pub fn new(blip: i32, fly: bool) -> Self {
-        Pause { sel: ROW_SFX, prev: 0xFF, blip, fly }
+        let font = FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT);
+        Pause { sel: ROW_SFX, prev: 0xFF, blip, fly, font }
     }
 
     fn row_count(&self) -> u8 {
@@ -124,7 +151,7 @@ impl Pause {
         backend::rectfill(12, 22, 115, bottom, 7);
         backend::rectfill(13, 23, 114, bottom - 1, 0);
         backend::rectfill(13, 23, 114, 33, 13);
-        print_centered(b"PAUSED", 25, 7);
+        self.text_center(25, "Paused", T_WHITE);
 
         // selection highlight bar + cursor
         let sel_y = match self.sel {
@@ -134,37 +161,37 @@ impl Pause {
             _ => quit_y,
         };
         backend::rectfill(15, sel_y - 2, 112, sel_y + 6, 1);
-        backend::print(b">", 17, sel_y, 7);
+        self.text(18, sel_y, ">", T_WHITE);
 
-        self.draw_slider(ROW_SFX, b"SFX", sfx::sfx_volume(), sfx_y);
-        self.draw_slider(ROW_MUSIC, b"MUSIC", sfx::music_volume(), music_y);
+        self.draw_slider(ROW_SFX, "SFX", sfx::sfx_volume(), sfx_y);
+        self.draw_slider(ROW_MUSIC, "Music", sfx::music_volume(), music_y);
 
         if fly {
             let lit = self.sel == ROW_FLY;
-            draw_tri(26, fly_y, 11); // green PS1-triangle icon
-            backend::print(b"FLY", 34, fly_y, if lit { 7 } else { 6 });
+            draw_tri(27, fly_y, 11); // green PS1-triangle icon
+            self.text(34, fly_y, "Fly", if lit { T_WHITE } else { T_GREY });
             let on = crate::debug::fly_enabled();
-            backend::print(if on { b"ON" } else { b"OFF" }, 92, fly_y, if on { 11 } else { 5 });
+            self.text(92, fly_y, if on { "On" } else { "Off" }, if on { T_GREEN } else { T_DIM });
         }
 
-        let quit_c = if self.sel == self.quit_row() { 7 } else { 6 };
-        backend::print(b"QUIT TO MENU", 26, quit_y, quit_c);
+        let quit_t = if self.sel == self.quit_row() { T_WHITE } else { T_GREY };
+        self.text(28, quit_y, "Quit to Menu", quit_t);
 
-        print_centered(b"START = RESUME", footer_y, 6);
+        self.text_center(footer_y, "Start = Resume", T_GREY);
         if fly {
-            // "HOLD <tri> TO FLY" -- spell out the activation button
-            backend::print(b"HOLD", 38, hint_y, 5);
-            draw_tri(58, hint_y, 11);
-            backend::print(b"TO FLY", 66, hint_y, 5);
+            // "Hold <tri> to Fly" -- spell out the activation button
+            self.text(40, hint_y, "Hold", T_DIM);
+            draw_tri(59, hint_y, 11);
+            self.text(67, hint_y, "to Fly", T_DIM);
         }
     }
 
-    fn draw_slider(&self, row: u8, label: &[u8], vol: u16, y: i16) {
+    fn draw_slider(&self, row: u8, label: &str, vol: u16, y: i16) {
         let lit = self.sel == row;
-        backend::print(label, 26, y, if lit { 7 } else { 6 });
+        self.text(28, y, label, if lit { T_WHITE } else { T_GREY });
         // a 40px track with a filled portion and a handle at the fill end
-        let tx: i16 = 54;
-        let tw: i16 = 40;
+        let tx: i16 = 56;
+        let tw: i16 = 38;
         backend::rectfill(tx, y + 1, tx + tw, y + 3, 5); // track
         let fw = (vol as i16) * tw / 8;
         if fw > 0 {
@@ -173,12 +200,17 @@ impl Pause {
         let kx = tx + fw;
         backend::rectfill(kx - 1, y - 1, kx + 1, y + 5, if lit { 7 } else { 6 }); // handle
     }
-}
 
-/// Centre an ASCII string horizontally on the 128px screen (4px/char) and print.
-fn print_centered(s: &[u8], y: i16, c: i32) {
-    let w = (s.len() as i16) * 4;
-    backend::print(s, 64 - w / 2, y, c);
+    /// Draw text in the PSX font at PICO-8 128-space `(px, py)` (converted to screen).
+    fn text(&self, px: i16, py: i16, s: &str, tint: (u8, u8, u8)) {
+        self.font.draw_text(sx(px), sy(py), s, tint);
+    }
+
+    /// Horizontally centre PSX-font text on the screen at 128-space row `py`.
+    fn text_center(&self, py: i16, s: &str, tint: (u8, u8, u8)) {
+        let w = self.font.text_width(s) as i16;
+        self.font.draw_text(160 - w / 2, sy(py), s, tint);
+    }
 }
 
 /// A small upward-pointing filled triangle (~5x4 px) -- the PS1 Triangle button
