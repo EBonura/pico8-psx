@@ -28,9 +28,9 @@ use assets::cover_celeste::COVER_CELESTE;
 use assets::cover_celeste2::COVER_CELESTE2;
 use assets::palette::PICO8_CLUT;
 
-use pico8::{backend, sfx};
+use pico8::sfx;
 use psx_font::{fonts::BASIC, FontAtlas};
-use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
+use psx_gpu::{self as gpu, framebuf::FrameBuffer, material::BlendMode, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
 use psx_vram::{upload_16bpp, Clut, TexDepth, Tpage, VramRect};
 
@@ -94,7 +94,7 @@ fn main() {
     }
 }
 
-/// Boot intro: fade the Bonnie Studios logo (with "BUILT WITH PSoXIDE") in, hold,
+/// Boot intro: fade the Bonnie Studios logo (with "Built with PSoXide") in, hold,
 /// fade out, then return to the menu. Any face button skips it.
 fn show_intro() {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
@@ -104,7 +104,7 @@ fn show_intro() {
 
     upload_16bpp(VramRect::new(BONNIE_TPAGE.x(), BONNIE_TPAGE.y(), 32, 128), &COVER_BONNIE);
     upload_cover_clut();
-    backend::upload_font();
+    let font = FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT);
 
     const FADE_IN: i32 = 32;
     const HOLD: i32 = 74;
@@ -123,7 +123,8 @@ fn show_intro() {
         }
         prev = b;
 
-        // logo brightness 0..0x80 over fade-in / hold / fade-out
+        // brightness 0..0x80 over fade-in / hold / fade-out (0x80 == full / neutral
+        // texture modulation, so the logo art reads pure white at the peak).
         let lvl = if frame < FADE_IN {
             frame * 0x80 / FADE_IN
         } else if frame < FADE_IN + HOLD {
@@ -134,19 +135,9 @@ fn show_intro() {
         .clamp(0, 0x80) as u8;
 
         fb.clear(0, 0, 0);
-        draw_cover(BONNIE_TPAGE, 112, 38, (lvl, lvl, lvl));
-        // tagline below, faded through PICO-8 greys (0->1->13->6) as the logo rises.
-        backend::camera(0, 0);
-        let c = if lvl < 0x18 {
-            0
-        } else if lvl < 0x40 {
-            1
-        } else if lvl < 0x68 {
-            13
-        } else {
-            6
-        };
-        pprint_center(b"built with psoxide", 80, c);
+        draw_cover(BONNIE_TPAGE, 112, 34, (lvl, lvl, lvl));
+        let tag = "Built with PSoXide";
+        font.draw_text(SCREEN_CX - text_half(&font, tag), 150, tag, (lvl, lvl, lvl));
 
         gpu::draw_sync();
         wait_vblank();
@@ -155,46 +146,51 @@ fn show_intro() {
     }
 }
 
-/// Scrolling credits screen (reached with Select from the menu). Renders in the
-/// PICO-8 font; any face button returns to the menu.
+/// Scrolling credits screen (reached with Select from the menu). Default font,
+/// proper capitalisation; any face button returns to the menu.
 fn show_credits() {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
     let mut fb = FrameBuffer::new(320, 240);
     gpu::set_draw_area(0, 0, 319, 239);
     gpu::set_draw_offset(0, 0);
-    backend::upload_font();
+    let font = FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT);
     sfx::init(celeste::AUDIO);
 
-    // (text, PICO-8 colour). Empty lines are spacers. Rendered all-caps by the font.
-    const LINES: &[(&[u8], i32)] = &[
-        (b"celeste classic collection", 10),
-        (b"", 0),
-        (b"ps1 port by", 6),
-        (b"bonnie studios", 7),
-        (b"bonnie-studios.itch.io", 12),
-        (b"", 0),
-        (b"built with psoxide", 6),
-        (b"github.com/ebonura/psoxide", 12),
-        (b"", 0),
-        (b"the original games", 5),
-        (b"", 0),
-        (b"celeste classic   2016", 7),
-        (b"maddy thorson  noel berry", 6),
-        (b"", 0),
-        (b"celeste 2 lani's trek  2021", 7),
-        (b"maddy thorson  noel berry", 6),
-        (b"music   lena raine", 6),
-        (b"", 0),
-        (b"made with pico-8", 7),
-        (b"by lexaloffle games", 6),
-        (b"lexaloffle.com/pico-8.php", 12),
-        (b"", 0),
-        (b"unofficial fan port", 5),
-        (b"free forever", 5),
-        (b"all rights to the original", 5),
-        (b"creators", 5),
+    // (text, RGB tint). 0x80 == full brightness. Empty lines are spacers.
+    const TITLE: (u8, u8, u8) = (0x80, 0x74, 0x30); // warm gold
+    const SECT: (u8, u8, u8) = (0x50, 0x50, 0x68); // section header
+    const NAME: (u8, u8, u8) = (0x78, 0x78, 0x78); // white-ish
+    const HEAD: (u8, u8, u8) = (0x80, 0x80, 0x80); // bright game name
+    const LBL: (u8, u8, u8) = (0x58, 0x58, 0x60); // label
+    const URL: (u8, u8, u8) = (0x38, 0x58, 0x80); // blue link
+    const DIM: (u8, u8, u8) = (0x48, 0x48, 0x54); // disclaimer
+    const LINES: &[(&str, (u8, u8, u8))] = &[
+        ("Celeste Classic Collection", TITLE),
+        ("", LBL),
+        ("PS1 Port by", LBL),
+        ("Bonnie Studios", NAME),
+        ("bonnie-studios.itch.io", URL),
+        ("", LBL),
+        ("Built with PSoXide", LBL),
+        ("github.com/EBonura/PSoXide", URL),
+        ("", LBL),
+        ("The Original Games", SECT),
+        ("", LBL),
+        ("Celeste Classic   2016", HEAD),
+        ("Maddy Thorson   Noel Berry", NAME),
+        ("", LBL),
+        ("Celeste 2: Lani's Trek   2021", HEAD),
+        ("Maddy Thorson   Noel Berry", NAME),
+        ("Music   Lena Raine", NAME),
+        ("", LBL),
+        ("Made with PICO-8", LBL),
+        ("by Lexaloffle Games", NAME),
+        ("lexaloffle.com/pico-8.php", URL),
+        ("", LBL),
+        ("Unofficial fan port, free forever", DIM),
+        ("All rights to the original creators", DIM),
     ];
-    const LINE_H: i16 = 7;
+    const LINE_H: i16 = 12;
     let content_h = LINES.len() as i16 * LINE_H;
 
     let any = |b: ButtonState| {
@@ -210,28 +206,26 @@ fn show_credits() {
         }
         prev = b;
 
-        fb.clear(0, 0, 16); // dark navy
-        backend::camera(0, 0);
-        let top = 132 - scroll; // scroll up from below the screen
-        let mut i: i16 = 0;
-        for (txt, col) in LINES {
+        fb.clear(8, 10, 26); // dark navy
+        let top = 236 - scroll; // scroll up from below the screen
+        for (i, (txt, col)) in LINES.iter().enumerate() {
             if !txt.is_empty() {
-                let y = top + i * LINE_H;
-                if y >= -7 && y <= 130 {
-                    pprint_center(txt, y, *col);
+                let y = top + i as i16 * LINE_H;
+                if y >= -12 && y <= 240 {
+                    font.draw_text(SCREEN_CX - text_half(&font, txt), y, txt, *col);
                 }
             }
-            i += 1;
         }
         // fixed footer over the scroll
-        backend::rectfill(0, 120, 127, 128, 0);
-        pprint_center(b"x  back", 121, 5);
+        gpu::draw_quad_flat([(0, 224), (320, 224), (0, 240), (320, 240)], 8, 10, 26);
+        let back = "X  Back";
+        font.draw_text(SCREEN_CX - text_half(&font, back), 226, back, (0x50, 0x50, 0x58));
 
         tick += 1;
         if tick & 1 == 0 {
             scroll += 1; // ~0.5px/frame
         }
-        if scroll > content_h + 134 {
+        if scroll > content_h + 240 {
             scroll = 0; // loop
         }
 
@@ -240,12 +234,6 @@ fn show_credits() {
         wait_vblank();
         fb.swap();
     }
-}
-
-/// Centre an all-caps string on the 128px PICO-8 screen (4px/char) and print it.
-#[inline]
-fn pprint_center(s: &[u8], y: i16, c: i32) {
-    backend::print(s, 64 - (s.len() as i16) * 2, y, c);
 }
 
 /// Upload the opaque-black PICO-8 CLUT used by the covers + logo.
@@ -272,6 +260,7 @@ fn show_menu() -> usize {
     // for "quit to menu" in a game carries the held X into the menu and instantly
     // re-launches the first game. A held button is voided until released + pressed.
     let mut prev = poll_port1().buttons;
+    let mut frame = 0i32; // animation clock (starfield drift, glow pulse)
 
     loop {
         let b = poll_port1().buttons;
@@ -303,24 +292,16 @@ fn show_menu() -> usize {
         }
         prev = b;
 
-        // PICO-8 dark-navy backdrop.
-        fb.clear(13, 20, 40);
+        // Atmospheric backdrop: a gentle vertical gradient (cooler for Celeste,
+        // warmer/purple for Celeste 2) plus a drifting, twinkling starfield.
+        fb.clear(8, 10, 26);
+        draw_gradient(sel);
+        draw_stars(frame);
 
-        // Selection frame: a filled rect just larger than the chosen
-        // cover. The covers are drawn with an opaque-black CLUT (see
-        // upload_menu_vram), so only the 5px border shows around them.
-        let (fx, _) = if sel == 0 { (COVER1_X, CENTER1) } else { (COVER2_X, CENTER2) };
-        gpu::draw_quad_flat(
-            [
-                (fx - 5, COVER_Y - 5),
-                (fx + COVER_W + 5, COVER_Y - 5),
-                (fx - 5, COVER_Y + COVER_H + 5),
-                (fx + COVER_W + 5, COVER_Y + COVER_H + 5),
-            ],
-            255,
-            236,
-            39, // PICO-8 yellow
-        );
+        // Soft pulsing blue glow around the selected cover (replaces the old flat
+        // yellow border): layered additive translucent rects, brightest at the edge.
+        let sel_x = if sel == 0 { COVER1_X } else { COVER2_X };
+        draw_glow(sel_x, COVER_Y, frame);
 
         // Covers: the selected one full-bright, the other dimmed.
         let (t0, t1) = if sel == 0 {
@@ -331,28 +312,83 @@ fn show_menu() -> usize {
         draw_cover(COVER1_TPAGE, COVER1_X, COVER_Y, t0);
         draw_cover(COVER2_TPAGE, COVER2_X, COVER_Y, t1);
 
-        // Title, per-cover labels, and the controls hint.
-        let title = "PICO-8  PSX";
-        font.draw_text(SCREEN_CX - text_half(&font, title), 22, title, (0x80, 0x80, 0x80));
+        // Title, per-cover labels, and the controls hints.
+        let title = "Celeste Classic Collection";
+        font.draw_text(SCREEN_CX - text_half(&font, title), 20, title, (0x80, 0x74, 0x30));
 
         let (l0, l1) = if sel == 0 {
-            ((0x80, 0x80, 0x80), (0x40, 0x40, 0x40))
+            ((0x80, 0x80, 0x80), (0x44, 0x44, 0x44))
         } else {
-            ((0x40, 0x40, 0x40), (0x80, 0x80, 0x80))
+            ((0x44, 0x44, 0x44), (0x80, 0x80, 0x80))
         };
-        font.draw_text(CENTER1 - text_half(&font, "CELESTE"), 166, "CELESTE", l0);
-        font.draw_text(CENTER2 - text_half(&font, "CELESTE 2"), 166, "CELESTE 2", l1);
+        font.draw_text(CENTER1 - text_half(&font, "Celeste"), 166, "Celeste", l0);
+        font.draw_text(CENTER2 - text_half(&font, "Celeste 2"), 166, "Celeste 2", l1);
 
-        let hint = "D-PAD  SELECT     X  PLAY";
+        let hint = "D-Pad  Select        X  Play";
         font.draw_text(SCREEN_CX - text_half(&font, hint), 210, hint, (0x60, 0x60, 0x60));
 
-        let hint2 = "SELECT  CREDITS";
+        let hint2 = "Select: Credits";
         font.draw_text(SCREEN_CX - text_half(&font, hint2), 222, hint2, (0x48, 0x48, 0x58));
 
         sfx::update(); // advance the SPU sequencer so menu blips play out
         gpu::draw_sync();
         wait_vblank();
         fb.swap();
+        frame = frame.wrapping_add(1);
+    }
+}
+
+/// Vertical gradient backdrop, tinted by the current selection (cool navy for
+/// Celeste, warmer purple for Celeste 2). Two Gouraud triangles span the screen.
+fn draw_gradient(sel: usize) {
+    let (top, bot) = if sel == 0 {
+        ((6, 10, 32), (16, 14, 48))
+    } else {
+        ((20, 8, 34), (30, 14, 48))
+    };
+    gpu::draw_tri_gouraud([(0, 0), (320, 0), (0, 240)], [top, top, bot]);
+    gpu::draw_tri_gouraud([(320, 0), (0, 240), (320, 240)], [top, bot, bot]);
+}
+
+/// Drifting, twinkling starfield. Positions are a cheap per-index hash; each star
+/// falls slowly (wrapping) and pulses via a triangle wave -- no persistent state.
+fn draw_stars(frame: i32) {
+    const N: i32 = 56;
+    let mut i = 0;
+    while i < N {
+        let sx = ((i * 71 + 13) % 320) as i16;
+        let speed = 1 + (i % 3);
+        let y = (((i * 109 + 29) % 240 + frame * speed / 5) % 240) as i16;
+        let t = (frame + i * 37) % 80;
+        let tw = if t < 40 { t } else { 80 - t }; // 0..40
+        let b = (0x16 + tw) as u8; // 0x16..0x3E
+        let bl = (b as i32 + 0x12).min(0xFF) as u8; // a touch cooler
+        gpu::draw_quad_flat([(sx, y), (sx + 1, y), (sx, y + 1), (sx + 1, y + 1)], b, b, bl);
+        i += 1;
+    }
+}
+
+/// Soft pulsing blue glow around a cover at `(cover_x, cover_y)`: concentric
+/// additive translucent rects so the colour stacks brightest at the cover edge
+/// and fades outward. Works over any backdrop (no gradient-to-bg trick needed).
+fn draw_glow(cover_x: i16, cover_y: i16, frame: i32) {
+    const LAYERS: i16 = 10;
+    const STEP: i16 = 3;
+    // pulse 88..118 (of 128 = unity) on a slow triangle wave
+    let t = frame % 96;
+    let p = if t < 48 { t } else { 96 - t } as i16; // 0..48
+    let pulse = 86 + p * 32 / 48; // ~86..118
+    let mut layer = 0i16;
+    while layer < LAYERS {
+        let m = (LAYERS - layer) * STEP; // outer layers are larger
+        let (x0, y0) = (cover_x - m, cover_y - m);
+        let (x1, y1) = (cover_x + COVER_W + m, cover_y + COVER_H + m);
+        let r = (3 * pulse / 128) as u8;
+        let g = (8 * pulse / 128) as u8;
+        let bl = (22 * pulse / 128) as u8;
+        gpu::draw_tri_flat_blended([(x0, y0), (x1, y0), (x0, y1)], r, g, bl, BlendMode::Add);
+        gpu::draw_tri_flat_blended([(x1, y0), (x0, y1), (x1, y1)], r, g, bl, BlendMode::Add);
+        layer += 1;
     }
 }
 
