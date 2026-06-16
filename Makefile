@@ -13,11 +13,11 @@ TARGET   := mipsel-sony-psx
 DIST     := $(ROOT)/dist
 
 # Where PSoXide's frontend scans for games (the `game_library` setting). The
-# `collection` target installs the demo disc here as `celeste_collection` so it
+# `collection` target installs the demo disc here under COLLECTION_NAME so it
 # shows up in PSoXide's list automatically. Override with `make collection
-# PSOXIDE_LIB=/path`.
+# PSOXIDE_LIB=/path`. The name has spaces/parens; mkisopsx quotes the CUE FILE line.
 PSOXIDE_LIB     ?= $(HOME)/Downloads/ps1 games
-COLLECTION_NAME := celeste_collection
+COLLECTION_NAME := Celeste Classic Collection PSX (Homebrew)
 
 .PHONY: help submodule clean demo demo-disc collection celeste celeste-disc celeste2 celeste2-disc
 
@@ -25,7 +25,7 @@ help:
 	@echo "pico8-psx targets:"
 	@echo "  make demo          - build the demo-disc launcher PSX-EXE (both games + menu)"
 	@echo "  make demo-disc     - build the demo + pack dist/demo.{bin,cue}  [headline artifact]"
-	@echo "  make collection    - build the demo + install into PSoXide's library as celeste_collection"
+	@echo "  make collection    - build the demo + install into PSoXide's library as 'Celeste Classic Collection PSX (Homebrew)'"
 	@echo "  make celeste       - build the standalone Celeste PSX-EXE"
 	@echo "  make celeste-disc  - build celeste + pack a burnable .bin/.cue into dist/"
 	@echo "  make celeste2      - build the standalone Celeste 2 PSX-EXE"
@@ -61,7 +61,7 @@ demo-disc: demo
 		--volume PICO8PSX
 	@echo "DISC -> $(DIST)/demo.cue"
 
-# Install the demo disc into PSoXide's game library as `celeste_collection`,
+# Install the demo disc into PSoXide's game library under COLLECTION_NAME,
 # so it appears in the frontend's list. mkisopsx writes the .cue alongside the
 # .bin with a relative FILE reference, matching the library's per-game folder
 # layout. The library path may contain a space, so quote it in the recipe.
