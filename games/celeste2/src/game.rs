@@ -2269,10 +2269,13 @@ unsafe fn draw_sine_h(
 
 /// Outline rectangle (the backend only has filled rects).
 unsafe fn rect_outline(x0: i16, y0: i16, x1: i16, y1: i16, c: i32) {
-    backend::line(x0, y0, x1, y0, c);
-    backend::line(x0, y1, x1, y1, c);
-    backend::line(x0, y0, x0, y1, c);
-    backend::line(x1, y0, x1, y1, c);
+    // 1px-thick edges via rectfill (quads) rather than GP0 lines, which some
+    // hardware-accelerated PS1 renderers drop -- the score-panel/title borders
+    // were going missing.
+    backend::rectfill(x0, y0, x1, y0, c); // top
+    backend::rectfill(x0, y1, x1, y1, c); // bottom
+    backend::rectfill(x0, y0, x0, y1, c); // left
+    backend::rectfill(x1, y0, x1, y1, c); // right
 }
 
 /// Two-digit decimal into `buf[0..2]`.
