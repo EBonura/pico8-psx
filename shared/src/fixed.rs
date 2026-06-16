@@ -81,6 +81,30 @@ impl Fix32 {
     pub fn cos(self) -> Fix32 {
         -((self + fx(0.25)).sin())
     }
+    /// PICO-8 `sqrt`. Negative input returns 0 (PICO-8 yields 0 for x < 0).
+    /// Bit-by-bit integer sqrt on the raw value pre-shifted by 16: for a 16.16
+    /// value v = raw/2^16, sqrt(v).raw == isqrt(raw << 16).
+    pub fn sqrt(self) -> Fix32 {
+        if self.0 <= 0 {
+            return Fix32::ZERO;
+        }
+        let mut x = (self.0 as u64) << 16;
+        let mut res: u64 = 0;
+        let mut bit: u64 = 1 << 46; // highest even power of two <= 2^47
+        while bit > x {
+            bit >>= 2;
+        }
+        while bit != 0 {
+            if x >= res + bit {
+                x -= res + bit;
+                res = (res >> 1) + bit;
+            } else {
+                res >>= 1;
+            }
+            bit >>= 2;
+        }
+        Fix32(res as i32)
+    }
 }
 
 impl Add for Fix32 {

@@ -1477,6 +1477,16 @@ unsafe fn player_draw(i: usize) {
         let ki = fi(k as i32);
         let wob = (ki * fx(0.25) + t).sin() * ki * fx(0.25);
         s.y += ((last.y - s.y) + wob) / fi(2);
+        // don't let a segment get too far from the previous one (Lua clamp) --
+        // without this, fast moves (wall jump / grapple) streak the scarf into
+        // stray colour-10 pixels across the level.
+        let dx = s.x - last.x;
+        let dy = s.y - last.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > fx(1.5) {
+            s.x = last.x + dx / dist * fx(1.5);
+            s.y = last.y + dy / dist * fx(1.5);
+        }
         SCARF[k - 1] = s;
         let (sx, sy) = (s.x.to_int() as i16, s.y.to_int() as i16);
         backend::rectfill(sx, sy, sx, sy, 10);
@@ -1486,9 +1496,10 @@ unsafe fn player_draw(i: usize) {
         last = s;
     }
 
-    // grapple rope (active grapple: straight taut line)
+    // grapple rope (active grapple: the original's wavy double-line, not a faint
+    // straight line). amplitude = 2*grapple_wave, freqs per the cart.
     if o.state >= 10 && o.state <= 12 {
-        backend::line(o.x.to_int() as i16, (o.y - fi(3)).to_int() as i16, o.grapple_x.to_int() as i16, (o.grapple_y).to_int() as i16, 7);
+        draw_sine_h(o.x, o.grapple_x, o.y - fi(3), 7, o.grapple_wave * fi(2), fi(6), fx(0.08), 6);
     }
     // retracting grapple: dark underline (1) then white rope (7), as in the original
     if o.grapple_retract {
@@ -2124,6 +2135,61 @@ pub fn draw() {
 unsafe fn print_center(text: &[u8], cx: i16, y: i16, c: i32) {
     let x = cx - (text.len() as i16 * 4 - 1) / 2;
     backend::print(text, x, y, c);
+}
+
+/// PICO-8 `pset` -- a single pixel (the backend has no pset; a 1px rectfill is it).
+#[inline]
+unsafe fn pset(x: i16, y: i16, c: i32) {
+    backend::rectfill(x, y, x, y, c);
+}
+
+/// PICO-8 `draw_sine_h` -- a horizontal wavy line from x0 to x1 at height `y`,
+/// each lit pixel sitting on a colour-1 underline, with the wave faded in/out at
+/// the ends and vertical gaps between samples filled so the rope reads as one
+/// continuous strand. Used for the active grapple rope. Faithful port of the cart.
+unsafe fn draw_sine_h(
+    x0: Fix32,
+    x1: Fix32,
+    y: Fix32,
+    col: i32,
+    amplitude: Fix32,
+    time_freq: Fix32,
+    x_freq: Fix32,
+    fade_x_dist: i32,
+) {
+    let t = fi(FRAMES) / fi(60); // time()
+    let yi = y.floor_int() as i16;
+    pset(x0.floor_int() as i16, yi, col);
+    pset(x1.floor_int() as i16, yi, col);
+
+    let x_sign: i32 = if x1.0 >= x0.0 { 1 } else { -1 };
+    let x_max = (x1 - x0).abs().to_int() - 1;
+    let mut last_y = y;
+    let mut i = 1;
+    while i <= x_max {
+        let fade = if i <= fade_x_dist {
+            fi(i) / fi(fade_x_dist + 1)
+        } else if i > x_max - fade_x_dist + 1 {
+            fi(x_max + 1 - i) / fi(fade_x_dist + 1)
+        } else {
+            fi(1)
+        };
+        let ax = (x0.to_int() + i * x_sign) as i16;
+        let ay = y + (t * time_freq + fi(i) * x_freq).sin() * amplitude * fade;
+        pset(ax, (ay + fi(1)).floor_int() as i16, 1);
+        pset(ax, ay.floor_int() as i16, col);
+
+        // fill the vertical gap back to the previous sample so the rope is solid
+        let step = if ay.0 > last_y.0 { 1 } else if ay.0 < last_y.0 { -1 } else { 0 };
+        let mut fy = ay;
+        while step != 0 && (fy - last_y).abs() > fi(1) {
+            fy = fy - fi(step);
+            pset(ax - x_sign as i16, (fy + fi(1)).floor_int() as i16, 1);
+            pset(ax - x_sign as i16, fy.floor_int() as i16, col);
+        }
+        last_y = ay;
+        i += 1;
+    }
 }
 
 /// Outline rectangle (the backend only has filled rects).
