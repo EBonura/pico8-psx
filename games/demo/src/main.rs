@@ -185,8 +185,11 @@ fn show_credits() {
         ("Bonnie Studios", NAME),
         ("bonnie-studios.itch.io", URL),
         ("", LBL),
-        ("Built with PSoXide", PSOX),
+        ("Built with PSoXide   GPL-2.0", PSOX),
         ("github.com/EBonura/PSoXide", URL),
+        ("", LBL),
+        ("Menu Sounds   Kenney (CC0)", NAME),
+        ("kenney.nl", URL),
         ("", LBL),
         ("The Original Games", SECT),
         ("", LBL),
@@ -382,13 +385,17 @@ fn draw_menu_scene(fb: &mut FrameBuffer, font: &FontAtlas, sel: usize, frame: i3
         ol_gradient(font, CENTER2 - text_half(font, "Celeste 2"), 166, "Celeste 2", icy_top, icy_bot);
     }
 
-    // hints, stacked: button names in a right-aligned column, labels left of them.
+    // hints, stacked: button names right-aligned to a colon divider, labels after.
     let bcol = (0x70, 0x68, 0x3c); // button = soft gold
     let lcol = (0x54, 0x54, 0x5c); // label = grey
-    let (div, labx) = (150i16, 166i16);
-    ol_text(font, div - font.text_width("Start") as i16, 204, "Start", bcol);
+    let colon = 150i16; // the ':' column; button right-aligned to it, label after
+    let cw = font.text_width(":") as i16;
+    let labx = colon + cw + 3;
+    ol_text(font, colon - font.text_width("Start") as i16, 204, "Start", bcol);
+    ol_text(font, colon, 204, ":", lcol);
     ol_text(font, labx, 204, "Menu", lcol);
-    ol_text(font, div - font.text_width("Select") as i16, 216, "Select", bcol);
+    ol_text(font, colon - font.text_width("Select") as i16, 216, "Select", bcol);
+    ol_text(font, colon, 216, ":", lcol);
     ol_text(font, labx, 216, "Credits", lcol);
 }
 

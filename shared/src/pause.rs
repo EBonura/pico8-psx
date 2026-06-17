@@ -328,8 +328,11 @@ impl Pause {
     }
 }
 
-/// A small upward-pointing filled triangle (~5x4 px) -- the PS1 Triangle button
-/// icon. Drawn as a quad with a doubled last vertex so it collapses to a tri.
+/// The PlayStation Triangle face-button glyph: a small hollow up-pointing
+/// triangle outline (~7x6 px) in the button's teal-green, the authentic icon
+/// rather than a flat blob. Two nested tris (a doubled last vertex collapses
+/// each quad to a triangle): the outer in colour `c`, an inner cut in black.
 fn draw_tri(x: i16, y: i16, c: i32) {
-    backend::quad([(x + 2, y), (x, y + 4), (x + 4, y + 4), (x + 4, y + 4)], c);
+    backend::quad([(x + 3, y), (x, y + 6), (x + 6, y + 6), (x + 6, y + 6)], c);
+    backend::quad([(x + 3, y + 2), (x + 1, y + 5), (x + 5, y + 5), (x + 5, y + 5)], 0);
 }

@@ -30,6 +30,16 @@ image. Shared runtime, rendering, SPU audio, fonts, pause menu, lives in `shared
 
 ## Credits
 
-PICO-8 carts by Maddy Thorson and Noel Berry (Celeste 2 music by Lena Raine). Menu sounds from
-Kenney's [Interface Sounds](https://kenney.nl/assets/interface-sounds) (CC0). Built with
-[PSoXide](https://github.com/EBonura/PSoXide).
+- **Celeste** (2016) and **Celeste 2: Lani's Trek** (2021), the original PICO-8 carts, by
+  Maddy Thorson and Noel Berry; Celeste 2 music by Lena Raine.
+- **[PICO-8](https://www.lexaloffle.com/pico-8.php)** by Lexaloffle Games.
+- Menu sounds from Kenney's [Interface Sounds](https://kenney.nl/assets/interface-sounds)
+  (CC0 / public domain).
+- Built on the [PSoXide](https://github.com/EBonura/PSoXide) PS1 SDK (GPL-2.0).
+
+## License
+
+The port code in this repository is **GPL-2.0**, matching the PSoXide SDK it links against
+(see [`LICENSE`](LICENSE)). This is an unofficial, non-commercial fan port: Celeste, Celeste 2,
+and PICO-8 belong to their respective creators, and all rights to the original games remain
+theirs.
