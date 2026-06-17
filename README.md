@@ -24,8 +24,8 @@ to choose, X to play; hold Select+Start in-game to return.
 ## Layout
 
 Each game is a standalone Cargo workspace exposing `run()`, shipped on its own or linked into
-the `demo` launcher (one EXE, one disc). Shared runtime, rendering, SPU audio, fonts, pause
-menu, lives in `shared/`. The PSoXide SDK is pinned as a git submodule under `third_party/`;
+the `demo` launcher, both games in one combined EXE, packed into a single `.bin`/`.cue` disc
+image. Shared runtime, rendering, SPU audio, fonts, pause menu, lives in `shared/`. The PSoXide SDK is pinned as a git submodule under `third_party/`;
 `tools/` holds the PICO-8 -> Rust asset/audio converters.
 
 ## Credits
