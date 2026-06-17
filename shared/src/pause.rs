@@ -75,13 +75,16 @@ impl Pause {
     }
 
     fn row_count(&self) -> u8 {
-        if self.fly { 6 } else { 5 }
+        if self.fly { 7 } else { 6 }
     }
-    fn screen_row(&self) -> u8 {
+    fn pixel_row(&self) -> u8 {
         if self.fly { 3 } else { 2 }
     }
+    fn screen_row(&self) -> u8 {
+        self.pixel_row() + 1
+    }
     fn borders_row(&self) -> u8 {
-        self.screen_row() + 1
+        self.pixel_row() + 2
     }
     fn quit_row(&self) -> u8 {
         self.row_count() - 1
@@ -118,7 +121,10 @@ impl Pause {
             if self.fly && self.sel == ROW_FLY {
                 crate::debug::set_fly(dir > 0); // right = on, left = off
                 crate::menusfx::play(crate::menusfx::SFX_NAV);
-            } else if self.sel == self.screen_row() {
+            } else if self.sel == self.pixel_row() {
+                backend::set_pixel_scale(if dir > 0 { 2 } else { 1 });
+                crate::menusfx::play(crate::menusfx::SFX_NAV);
+            } else if self.sel == self.screen_row() && backend::pixel_scale() != 1 {
                 backend::set_screen_follow(dir > 0); // right = follow, left = centre
                 crate::menusfx::play(crate::menusfx::SFX_NAV);
             } else if self.sel == self.borders_row() {
@@ -146,7 +152,10 @@ impl Pause {
             if self.fly && self.sel == ROW_FLY {
                 crate::debug::toggle_fly();
                 crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
-            } else if self.sel == self.screen_row() {
+            } else if self.sel == self.pixel_row() {
+                backend::set_pixel_scale(if backend::pixel_scale() == 2 { 1 } else { 2 });
+                crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
+            } else if self.sel == self.screen_row() && backend::pixel_scale() != 1 {
                 backend::set_screen_follow(!backend::screen_follow());
                 crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
             } else if self.sel == self.borders_row() {
@@ -164,9 +173,14 @@ impl Pause {
     /// Draw the overlay (call after the game's own draw, before the buffer swap).
     /// Coordinates are PICO-8 128-space; the caller should have camera at (0,0).
     pub fn draw(&self) {
+        // The overlay positions text at a fixed 2x and uses the fixed-size PSX font,
+        // so render it at 2x regardless of the game's pixel scale; restore at the end
+        // (the frozen game behind is redrawn at its own scale next frame).
+        let game_scale = backend::pixel_scale();
+        backend::set_pixel_scale(2); // also centres V_OFS at the 2x centre (-8)
         backend::camera(0, 0);
-        backend::center_screen(); // overlay is centred; ignore the game's follow-pan
         let fly = self.fly;
+        let scale1x = game_scale == 1; // 1x never clips -> the Screen row is greyed
 
         // Row + panel geometry, sized to the rows and centred vertically (py 64).
         let n_rows = self.row_count() as i16;
@@ -181,6 +195,7 @@ impl Pause {
         let sfx_y = row_y(ROW_SFX);
         let music_y = row_y(ROW_MUSIC);
         let fly_y = row_y(ROW_FLY);
+        let pixel_y = row_y(self.pixel_row());
         let screen_y = row_y(self.screen_row());
         let borders_y = row_y(self.borders_row());
         let quit_y = row_y(self.quit_row());
@@ -199,6 +214,7 @@ impl Pause {
             ROW_SFX => sfx_y,
             ROW_MUSIC => music_y,
             r if fly && r == ROW_FLY => fly_y,
+            r if r == self.pixel_row() => pixel_y,
             r if r == self.screen_row() => screen_y,
             r if r == self.borders_row() => borders_y,
             _ => quit_y,
@@ -216,12 +232,33 @@ impl Pause {
             self.text(92, fly_y, if on { "On" } else { "Off" }, if on { T_GREEN } else { T_DIM });
         }
 
-        // screen mode toggle (vertical pan vs classic centre)
+        // pixel scale toggle (1x native vs 2x doubled)
+        {
+            let lit = self.sel == self.pixel_row();
+            self.text(28, pixel_y, "Pixel", if lit { T_WHITE } else { T_GREY });
+            let label = if game_scale == 1 { "1x" } else { "2x" };
+            self.text(74, pixel_y, label, if lit { T_WHITE } else { T_GREY });
+        }
+
+        // screen mode toggle (vertical pan vs classic centre) -- greyed at 1x (no clip)
         {
             let lit = self.sel == self.screen_row();
-            self.text(28, screen_y, "Screen", if lit { T_WHITE } else { T_GREY });
-            let follow = backend::screen_follow();
-            self.text(74, screen_y, if follow { "Follow" } else { "Center" }, if lit { T_WHITE } else { T_GREY });
+            let lbl_t = if scale1x {
+                T_DIM
+            } else if lit {
+                T_WHITE
+            } else {
+                T_GREY
+            };
+            self.text(28, screen_y, "Screen", lbl_t);
+            let val = if scale1x {
+                "--"
+            } else if backend::screen_follow() {
+                "Follow"
+            } else {
+                "Center"
+            };
+            self.text(74, screen_y, val, lbl_t);
         }
 
         // side-margin gradient preset
@@ -242,6 +279,8 @@ impl Pause {
             draw_tri(59, hint_y, 11);
             self.text(67, hint_y, "to Fly", T_DIM);
         }
+
+        backend::set_pixel_scale(game_scale); // restore the game's scale
     }
 
     fn draw_slider(&self, row: u8, label: &str, vol: u16, y: i16) {

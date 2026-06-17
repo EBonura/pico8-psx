@@ -47,23 +47,32 @@ const FILLP_TPAGE: Tpage = Tpage::new(768, 0, TexDepth::Bit4); // 8x8 dither pat
 const FILL_CLUT: Clut = Clut::new(0, 482); // 2 entries (0 = transparent, 1 = fill colour)
 
 // ---- Screen transform ----
-const SCALE: i16 = 2;
-const PLAY_W: i16 = 256; // 128 * SCALE
-const OFS_X: i16 = (320 - PLAY_W) / 2; // centre horizontally -> 32
-// The 256-tall field overflows the 240-line NTSC frame by 16px. OFS_Y_CENTER
-// clips 8 top + 8 bottom; "follow" mode pans the live offset V_OFS within
-// [-16, 0] to reveal the top (clip bottom) or bottom (clip top) near the player.
-const OFS_Y_CENTER: i16 = -8;
+// Pixel scale: 1 = native 128x128 (whole screen visible, centred in 320x240),
+// 2 = doubled 256x256 (fills more, overflows the frame by 16px -> 8px clipped top
+// and bottom, mitigated by the follow-pan). Runtime so the menu can switch it.
+static mut SCALE: i16 = 2; // default: 2x
+#[inline]
+fn play_w() -> i16 {
+    128 * unsafe { SCALE }
+}
+#[inline]
+fn ofs_x() -> i16 {
+    (320 - play_w()) / 2 // 1x: 96, 2x: 32
+}
+/// Vertical offset that centres the field: 1x -> +56 (fits), 2x -> -8 (clips 8/8).
+#[inline]
+fn ofs_y_center() -> i16 {
+    (240 - 128 * unsafe { SCALE }) / 2
+}
 
 // ---- Mutable PICO-8 draw state ----
 static mut CART: Cart = EMPTY_CART;
 static mut CAM_X: i16 = 0;
 static mut CAM_Y: i16 = 0;
 // Live vertical offset (eased toward V_TARGET each frame) and the follow toggle.
-// Follow is the default (reveals the top/bottom near the player); the pause menu
-// can switch back to classic centred.
-static mut V_OFS: i16 = OFS_Y_CENTER;
-static mut V_TARGET: i16 = OFS_Y_CENTER;
+// Follow only applies at 2x (1x never clips); the pause menu can switch it off.
+static mut V_OFS: i16 = -8; // 2x centre; kept in sync by set_pixel_scale
+static mut V_TARGET: i16 = -8;
 static mut V_FOLLOW: bool = true;
 /// PICO-8 `pal()` colour remap (draw index -> palette index).
 static mut PAL: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -101,11 +110,24 @@ pub fn begin_sprite_pass() {
 
 #[inline]
 fn sx(px: i16) -> i16 {
-    (px - unsafe { CAM_X }) * SCALE + OFS_X
+    (px - unsafe { CAM_X }) * unsafe { SCALE } + ofs_x()
 }
 #[inline]
 fn sy(py: i16) -> i16 {
-    (py - unsafe { CAM_Y }) * SCALE + unsafe { V_OFS }
+    (py - unsafe { CAM_Y }) * unsafe { SCALE } + unsafe { V_OFS }
+}
+
+/// Pixel scale: 1 = native 128x128, 2 = doubled 256x256. Changing it re-centres
+/// the vertical offset. A player setting (the pause-menu "Pixel" row).
+pub fn set_pixel_scale(s: i16) {
+    unsafe {
+        SCALE = if s <= 1 { 1 } else { 2 };
+        V_OFS = ofs_y_center();
+        V_TARGET = V_OFS;
+    }
+}
+pub fn pixel_scale() -> i16 {
+    unsafe { SCALE }
 }
 
 /// Snap the vertical offset back to centre immediately. The pause overlay calls
@@ -113,8 +135,8 @@ fn sy(py: i16) -> i16 {
 /// than inheriting the live follow-pan offset of the frozen game behind it.
 pub fn center_screen() {
     unsafe {
-        V_OFS = OFS_Y_CENTER;
-        V_TARGET = OFS_Y_CENTER;
+        V_OFS = ofs_y_center();
+        V_TARGET = V_OFS;
     }
 }
 
@@ -133,14 +155,20 @@ pub fn screen_follow() -> bool {
 /// it stays put while the player is mid-screen. Otherwise it eases back to centre.
 pub fn track_vofs(rel_py: i16) {
     unsafe {
+        if SCALE == 1 {
+            V_OFS = ofs_y_center(); // 1x never clips -> no pan
+            V_TARGET = V_OFS;
+            return;
+        }
+        let centre = ofs_y_center(); // -8 at 2x
         if !V_FOLLOW {
-            V_TARGET = OFS_Y_CENTER;
+            V_TARGET = centre;
         } else if rel_py < 36 {
             V_TARGET = 0; // player high in view -> reveal the top
         } else if rel_py > 92 {
             V_TARGET = -16; // player low in view -> reveal the bottom
         } else if rel_py > 52 && rel_py < 76 {
-            V_TARGET = OFS_Y_CENTER; // back to centre only once clearly mid-screen
+            V_TARGET = centre; // back to centre only once clearly mid-screen
         }
         // ease 1px/frame toward the target (gaps 36..52 / 76..92 hold = hysteresis)
         if V_OFS < V_TARGET {
@@ -163,64 +191,54 @@ fn rgb(c: i32) -> (u8, u8, u8) {
 // Sprite / map
 // --------------------------------------------------------------------
 
-/// A 16x16 primitive at screen `(x,y)` is fully outside the 320x240 frame.
-/// The GP0 vertex word is 11-bit signed, so a primitive at screen x >= 1024
-/// wraps to the left edge: a wide level's far-right objects (e.g. celeste2
-/// level-3 spikes at col 123) reappear as "floating" sprites on the left when
-/// the camera sits near the level's left edge. PICO-8's spr()/map() clip to the
-/// screen; we must cull here so the wrap can never happen.
+/// An `sz`x`sz` primitive at screen `(x,y)` is fully outside the 320x240 frame.
+/// The GP0 vertex word is 11-bit signed, so a primitive at screen x >= 1024 wraps
+/// to the left edge (a wide level's far-right objects reappear floating on the
+/// left). PICO-8's spr()/map() clip to the screen; we cull so the wrap can't happen.
 #[inline]
-fn offscreen16(x: i16, y: i16) -> bool {
-    x <= -16 || x >= 320 || y <= -16 || y >= 240
+fn offscreen_cell(x: i16, y: i16, sz: i16) -> bool {
+    x <= -sz || x >= 320 || y <= -sz || y >= 240
 }
 
-/// Raw 16x16 textured-rect blit (GP0 0x64). Tpage must already be set.
+/// Draw one doubled (16x16-in-VRAM) cell at screen `(x,y)`. At 2x non-flipped it
+/// uses the fast GP0 0x64 rect (the cell's draw-mode tpage must already be set);
+/// otherwise (1x, or flipped) a textured quad sized `8*SCALE` with a 16-texel UV
+/// span. At 1x the span downsamples the doubled cell back to native 8x8 -- exact,
+/// because the sheet is a nearest-neighbour 2x double (each texel pair is equal).
 #[inline]
-fn blit16(x: i16, y: i16, u0: u8, v0: u8, clut_word: u16) {
-    if offscreen16(x, y) {
+fn draw_cell(x: i16, y: i16, u0: u8, v0: u8, clut_word: u16, tpage: Tpage, flip_x: bool, flip_y: bool) {
+    let sc = unsafe { SCALE };
+    let sz = 8 * sc;
+    if offscreen_cell(x, y, sz) {
         return;
     }
-    wait_cmd_ready();
-    write_gp0(0x6400_0000 | pack_color(0x80, 0x80, 0x80));
-    write_gp0(pack_vertex(x, y));
-    write_gp0(pack_texcoord(u0, v0, clut_word));
-    write_gp0(pack_xy(16, 16));
+    if sc == 2 && !flip_x && !flip_y {
+        wait_cmd_ready();
+        write_gp0(0x6400_0000 | pack_color(0x80, 0x80, 0x80));
+        write_gp0(pack_vertex(x, y));
+        write_gp0(pack_texcoord(u0, v0, clut_word));
+        write_gp0(pack_xy(16, 16));
+        return;
+    }
+    // Clamp the far UV edge to 255 so a last-column cell (u0=240) doesn't wrap.
+    let u_hi = (u0 as u16 + 16).min(255) as u8;
+    let v_hi = (v0 as u16 + 16).min(255) as u8;
+    let (ul, ur) = if flip_x { (u_hi, u0) } else { (u0, u_hi) };
+    let (vt, vb) = if flip_y { (v_hi, v0) } else { (v0, v_hi) };
+    let verts = [(x, y), (x + sz, y), (x, y + sz), (x + sz, y + sz)];
+    let uvs = [(ul, vt), (ur, vt), (ul, vb), (ur, vb)];
+    gpu::draw_quad_textured(verts, uvs, clut_word, tpage.uv_tpage_word(0), (0x80, 0x80, 0x80));
 }
 
-/// PICO-8 `spr()`. Draws 8x8 PICO-8 sprite `n` (16x16 in the doubled sheet) at
-/// PICO-8 `(x,y)`. Non-flipped uses GP0 0x64; flipped uses a textured quad
-/// with swapped UVs.
+/// PICO-8 `spr()`. Draws 8x8 PICO-8 sprite `n` at PICO-8 `(x,y)`.
 pub fn spr(n: i32, x: i16, y: i16, flip_x: bool, flip_y: bool) {
     if n < 0 {
         return;
     }
     let u0 = ((n % 16) * 16) as u8;
     let v0 = ((n / 16) * 16) as u8;
-    let px = sx(x);
-    let py = sy(y);
-    if offscreen16(px, py) {
-        return; // cull before the GP0 11-bit vertex can wrap onto the screen
-    }
-    let clut_word = SPRITE_CLUT.uv_clut_word();
-
-    if !flip_x && !flip_y {
-        begin_sprite_pass();
-        blit16(px, py, u0, v0, clut_word);
-        return;
-    }
-
-    // Flipped: textured quad, corners TL,TR,BL,BR; swap UV per axis.
-    // The far UV edge is u0/v0 + 16, but UVs are u8: a last-column sprite (u0=240,
-    // e.g. the smoke's final frame 31) would wrap 256 -> 0 and the quad would
-    // sample the whole texture row as vertical multicolour garbage. Clamp the far
-    // edge to 255 (the last texel) so it stays inside the sprite's tile.
-    let u_hi = (u0 as u16 + 16).min(255) as u8;
-    let v_hi = (v0 as u16 + 16).min(255) as u8;
-    let (ul, ur) = if flip_x { (u_hi, u0) } else { (u0, u_hi) };
-    let (vt, vb) = if flip_y { (v_hi, v0) } else { (v0, v_hi) };
-    let verts = [(px, py), (px + 16, py), (px, py + 16), (px + 16, py + 16)];
-    let uvs = [(ul, vt), (ur, vt), (ul, vb), (ur, vb)];
-    gpu::draw_quad_textured(verts, uvs, clut_word, GFX_TPAGE.uv_tpage_word(0), (0x80, 0x80, 0x80));
+    begin_sprite_pass();
+    draw_cell(sx(x), sy(y), u0, v0, SPRITE_CLUT.uv_clut_word(), GFX_TPAGE, flip_x, flip_y);
 }
 
 /// `mget(x,y)` -- raw map fetch (NOT camera/room relative).
@@ -271,7 +289,7 @@ pub fn map(mx: i32, my: i32, tx: i16, ty: i16, mw: i32, mh: i32, mask: i32) {
             let v0 = ((t / 16) * 16) as u8;
             let px = sx(tx + (i as i16) * 8);
             let py = sy(ty + (j as i16) * 8);
-            blit16(px, py, u0, v0, clut_word);
+            draw_cell(px, py, u0, v0, clut_word, GFX_TPAGE, false, false);
         }
     }
 }
@@ -493,12 +511,34 @@ pub fn side_preset_name(p: u8) -> &'static str {
 /// camera/vertical-pan; call last in the game's draw to cover the field overdraw.
 pub fn side_bars() {
     let (t, b) = SIDE_PRESETS[unsafe { SIDE_PRESET } as usize];
-    side_bar(0, 32, t, b);
-    side_bar(288, 320, t, b);
+    // Playfield rect on screen. At 2x it spans the full height (top/bottom clipped,
+    // no margin there); at 1x it's centred 128x128, so all four sides have margin.
+    let px0 = ofs_x();
+    let px1 = px0 + play_w();
+    let py0 = ofs_y_center().max(0);
+    let py1 = (ofs_y_center() + 128 * unsafe { SCALE }).min(240);
+    side_strip(0, px0, 0, 240, t, b); // left (full height)
+    side_strip(px1, 320, 0, 240, t, b); // right
+    if py0 > 0 {
+        side_strip(px0, px1, 0, py0, t, b); // top (1x only)
+    }
+    if py1 < 240 {
+        side_strip(px0, px1, py1, 240, t, b); // bottom (1x only)
+    }
 }
-fn side_bar(x0: i16, x1: i16, top: (u8, u8, u8), bot: (u8, u8, u8)) {
-    gpu::draw_tri_gouraud([(x0, 0), (x1, 0), (x0, 240)], [top, top, bot]);
-    gpu::draw_tri_gouraud([(x1, 0), (x0, 240), (x1, 240)], [top, bot, bot]);
+/// One screen-space strip filled with the preset's vertical gradient, sampled at
+/// the strip's own y range so the whole border reads as one continuous gradient.
+fn side_strip(x0: i16, x1: i16, y0: i16, y1: i16, top: (u8, u8, u8), bot: (u8, u8, u8)) {
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let at = |y: i16| -> (u8, u8, u8) {
+        let mix = |a: u8, c: u8| (a as i32 + (c as i32 - a as i32) * y as i32 / 240) as u8;
+        (mix(top.0, bot.0), mix(top.1, bot.1), mix(top.2, bot.2))
+    };
+    let (c0, c1) = (at(y0), at(y1));
+    gpu::draw_tri_gouraud([(x0, y0), (x1, y0), (x0, y1)], [c0, c0, c1]);
+    gpu::draw_tri_gouraud([(x1, y0), (x0, y1), (x1, y1)], [c0, c1, c1]);
 }
 
 /// PICO-8 `circfill(x,y,r,c)` -- one 1px span per row, drawn symmetrically about
@@ -580,13 +620,7 @@ pub fn print(s: &[u8], x: i16, y: i16, c: i32) {
         let ci = (ch & 0x7F) as i32;
         let u0 = ((ci % 16) * 16) as u8;
         let v0 = ((ci / 16) * 16) as u8;
-        let px = sx(cx);
-        let py = sy(y);
-        wait_cmd_ready();
-        write_gp0(0x6400_0000 | pack_color(0x80, 0x80, 0x80));
-        write_gp0(pack_vertex(px, py));
-        write_gp0(pack_texcoord(u0, v0, clut_word));
-        write_gp0(pack_xy(16, 16));
+        draw_cell(sx(cx), sy(y), u0, v0, clut_word, FONT_TPAGE, false, false);
         cx += 4; // PICO-8 4px advance
     }
 }

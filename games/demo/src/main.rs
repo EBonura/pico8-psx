@@ -29,7 +29,7 @@ use assets::cover_celeste::COVER_CELESTE;
 use assets::cover_celeste2::COVER_CELESTE2;
 use assets::palette::PICO8_CLUT;
 
-use pico8::{menusfx, sfx};
+use pico8::{backend, menusfx, sfx};
 use psx_font::{fonts::BASIC, FontAtlas};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
@@ -88,7 +88,8 @@ fn main() {
         match show_menu(first) {
             0 => celeste::run(),
             1 => celeste2::run(),
-            _ => show_credits(),
+            2 => show_credits(),
+            _ => show_settings(),
         }
         first = false;
         // The game/credits clobbered VRAM and left the GPU in its own mode; the
@@ -316,6 +317,10 @@ fn show_menu(first: bool) -> usize {
             menusfx::play(menusfx::SFX_NAV);
             return 2; // open the credits screen
         }
+        if pressed(button::TRIANGLE) {
+            menusfx::play(menusfx::SFX_NAV);
+            return 3; // open the settings screen
+        }
         if pressed(button::CROSS) || pressed(button::START) {
             // Launch sound, then dissolve to black before the game boots (this also
             // gives the sound time to be heard before the SPU is clobbered).
@@ -377,8 +382,168 @@ fn draw_menu_scene(fb: &mut FrameBuffer, font: &FontAtlas, sel: usize, frame: i3
         ol_gradient(font, CENTER2 - text_half(font, "Celeste 2"), 166, "Celeste 2", icy_top, icy_bot);
     }
 
-    let hint2 = "Select: Credits";
-    ol_text(font, SCREEN_CX - text_half(font, hint2), 212, hint2, (0x48, 0x48, 0x58));
+    // hints: a green triangle for Settings, Select for Credits, on one centred line.
+    let h_set = "Settings";
+    let h_cred = "Select  Credits";
+    let (ws, wc) = (font.text_width(h_set) as i16, font.text_width(h_cred) as i16);
+    let (tri_w, gap) = (10i16, 18i16);
+    let mut hx = SCREEN_CX - (tri_w + ws + gap + wc) / 2;
+    draw_tri(hx, 213, (0x30, 0x90, 0x40));
+    hx += tri_w;
+    ol_text(font, hx, 212, h_set, (0x58, 0x58, 0x60));
+    hx += ws + gap;
+    ol_text(font, hx, 212, h_cred, (0x48, 0x48, 0x58));
+}
+
+/// Small up-pointing triangle (the PS1 Triangle-button glyph) for the hint line.
+fn draw_tri(x: i16, y: i16, c: (u8, u8, u8)) {
+    gpu::draw_tri_flat([(x + 3, y), (x, y + 6), (x + 6, y + 6)], c.0, c.1, c.2);
+}
+
+/// Settings screen (Triangle from the menu): the same global options as the
+/// in-game pause overlay -- volumes, pixel scale, screen mode, borders. Writes
+/// the shared backend/sfx state, so both menus stay in sync.
+fn show_settings() {
+    gpu::init(VideoMode::Ntsc, Resolution::R320X240);
+    let mut fb = FrameBuffer::new(320, 240);
+    gpu::set_draw_area(0, 0, 319, 239);
+    gpu::set_draw_offset(0, 0);
+    let font = upload_menu_vram();
+    sfx::init(celeste::AUDIO);
+    menusfx::init();
+
+    const N: usize = 5; // SFX, Music, Pixel, Screen, Borders
+    let mut sel = 0usize;
+    let mut prev = poll_port1().buttons;
+    let mut frame = 0i32;
+
+    loop {
+        let b = poll_port1().buttons;
+        let pressed = |m: u16| b.is_held(m) && !prev.is_held(m);
+        let scale1x = backend::pixel_scale() == 1;
+
+        if pressed(button::UP) {
+            sel = (sel + N - 1) % N;
+            menusfx::play(menusfx::SFX_NAV);
+        }
+        if pressed(button::DOWN) {
+            sel = (sel + 1) % N;
+            menusfx::play(menusfx::SFX_NAV);
+        }
+        let dir: i32 = if pressed(button::RIGHT) {
+            1
+        } else if pressed(button::LEFT) {
+            -1
+        } else {
+            0
+        };
+        if dir != 0 {
+            let mut changed = true;
+            match sel {
+                0 => sfx::set_sfx_volume((sfx::sfx_volume() as i32 + dir).clamp(0, 8) as u16),
+                1 => sfx::set_music_volume((sfx::music_volume() as i32 + dir).clamp(0, 8) as u16),
+                2 => backend::set_pixel_scale(if dir > 0 { 2 } else { 1 }),
+                3 if !scale1x => backend::set_screen_follow(dir > 0),
+                4 => {
+                    let n = backend::side_preset_count() as i32;
+                    let c = backend::side_preset() as i32;
+                    backend::set_side_preset((c + dir).rem_euclid(n) as u8);
+                }
+                _ => changed = false,
+            }
+            if changed {
+                menusfx::play(menusfx::SFX_NAV);
+            }
+        }
+        if pressed(button::CROSS) {
+            let mut changed = true;
+            match sel {
+                2 => backend::set_pixel_scale(if backend::pixel_scale() == 2 { 1 } else { 2 }),
+                3 if !scale1x => backend::set_screen_follow(!backend::screen_follow()),
+                4 => {
+                    let n = backend::side_preset_count();
+                    backend::set_side_preset((backend::side_preset() + 1) % n);
+                }
+                _ => changed = false,
+            }
+            if changed {
+                menusfx::play(menusfx::SFX_CONFIRM);
+            }
+        }
+        if pressed(button::CIRCLE) || pressed(button::START) || pressed(button::TRIANGLE) {
+            menusfx::play(menusfx::SFX_CONFIRM);
+            return;
+        }
+        prev = b;
+
+        fb.clear(6, 6, 16);
+        atmos::draw(0, frame);
+
+        let title = "Settings";
+        draw_sheen(&font, SCREEN_CX - text_half(&font, title), 24, title, (0x80, 0x78, 0x3c), (0x60, 0x2a, 0x0c), frame, 0x80);
+
+        const ROWS: [&str; N] = ["SFX", "Music", "Pixel", "Screen", "Borders"];
+        const Y0: i16 = 74;
+        const RH: i16 = 22;
+        let (lx, vx) = (84i16, 188i16);
+        for (i, label) in ROWS.iter().enumerate() {
+            let y = Y0 + i as i16 * RH;
+            let lit = i == sel;
+            if lit {
+                gpu::draw_quad_flat([(58, y - 3), (262, y - 3), (58, y + 11), (262, y + 11)], 0x12, 0x16, 0x32);
+                ol_text(&font, 64, y, ">", (0x80, 0x80, 0x80));
+            }
+            let dim = i == 3 && scale1x; // Screen greyed at 1x (no clipping)
+            let tint = if dim {
+                (0x40, 0x40, 0x48)
+            } else if lit {
+                (0x80, 0x80, 0x80)
+            } else {
+                (0x60, 0x60, 0x68)
+            };
+            ol_text(&font, lx, y, label, tint);
+            match i {
+                0 => draw_vol_slider(vx, y, sfx::sfx_volume(), lit),
+                1 => draw_vol_slider(vx, y, sfx::music_volume(), lit),
+                2 => ol_text(&font, vx, y, if scale1x { "1x" } else { "2x" }, tint),
+                3 => ol_text(
+                    &font,
+                    vx,
+                    y,
+                    if scale1x {
+                        "--"
+                    } else if backend::screen_follow() {
+                        "Follow"
+                    } else {
+                        "Center"
+                    },
+                    tint,
+                ),
+                4 => ol_text(&font, vx, y, backend::side_preset_name(backend::side_preset()), tint),
+                _ => {}
+            }
+        }
+
+        let hint = "Circle  Back";
+        ol_text(&font, SCREEN_CX - text_half(&font, hint), 216, hint, (0x48, 0x48, 0x58));
+
+        sfx::update();
+        gpu::draw_sync();
+        wait_vblank();
+        fb.swap();
+        frame = frame.wrapping_add(1);
+    }
+}
+
+/// A small volume slider (track + filled portion) at screen `(x, y)`.
+fn draw_vol_slider(x: i16, y: i16, vol: u16, lit: bool) {
+    const TW: i16 = 64;
+    gpu::draw_quad_flat([(x, y + 2), (x + TW, y + 2), (x, y + 6), (x + TW, y + 6)], 0x30, 0x30, 0x3a);
+    let fw = vol as i16 * TW / 8;
+    if fw > 0 {
+        let (r, g, b) = if lit { (0x30, 0xc0, 0x40) } else { (0x20, 0x70, 0x30) };
+        gpu::draw_quad_flat([(x, y + 2), (x + fw, y + 2), (x, y + 6), (x + fw, y + 6)], r, g, b);
+    }
 }
 
 /// Full-screen subtractive grey quad: `background - (g,g,g)`, a linear darken.
