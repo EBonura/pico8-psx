@@ -97,6 +97,7 @@ pub fn run() {
     gpu::set_draw_offset(0, 0);
     backend::upload_assets(CART);
     sfx::init(AUDIO);
+    pico8::menusfx::init(); // dedicated UI sample bank for the pause overlay
 
     // Seed the RNG before init (clouds/particles use it), like main.cpp.
     pico8::rng::srand(42);

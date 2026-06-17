@@ -24,6 +24,7 @@ pub mod debug;
 pub mod fixed;
 pub mod font;
 pub mod input;
+pub mod menusfx;
 pub mod palette;
 pub mod pause;
 pub mod rng;

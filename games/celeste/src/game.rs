@@ -1746,6 +1746,18 @@ pub fn draw() {
         }
         p8pal_reset();
 
+        // vertical follow-pan: ease the screen offset toward the player's row
+        // (rooms are single-screen, so the player's y is its on-screen row).
+        let mut prel = 64i16;
+        for i in 0..MAX_OBJECTS {
+            let o = objp(i);
+            if (*o).active && (*o).type_ == Player {
+                prel = (*o).y.to_int() as i16;
+                break;
+            }
+        }
+        backend::track_vofs(prel);
+
         if START_GAME {
             let mut c = 10;
             if START_GAME_FLASH > 20 {
@@ -1869,11 +1881,9 @@ pub fn draw() {
         p8rectfill(128, -5, 133, 133, 0);
 
         // The 128x128 PICO-8 image is drawn 2x (256 wide) and centred in 320, so
-        // there's a 32px black margin each side; clouds/particles spill into it.
-        // Cover the full side margins with black (a couple px into the play area
-        // so screenshake can't reveal a gap).
-        p8rectfill(-20, -20, 1, 148, 0);
-        p8rectfill(127, -20, 148, 148, 0);
+        // there's a 32px margin each side; clouds/particles spill into it. Cover the
+        // margins with the selected side-gradient (screen-space, ignores the shake).
+        backend::side_bars();
 
         if is_title() {
             p8print(b"x+c", 58, 80, 5);

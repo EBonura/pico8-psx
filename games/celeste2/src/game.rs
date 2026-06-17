@@ -2112,6 +2112,15 @@ unsafe fn draw_columns(lv: &LevelMeta) {
 
 pub fn draw() {
     unsafe {
+        // vertical follow-pan: ease the screen offset toward the player's row
+        // (centre when there's no player, e.g. the title/intro card).
+        let rel_py = if PLAYER != NONE && OBJ[PLAYER].exists {
+            (OBJ[PLAYER].y.to_int() - CAM_Y) as i16
+        } else {
+            64
+        };
+        backend::track_vofs(rel_py);
+
         if LVL_INDEX == 0 {
             draw_title();
             return;
@@ -2204,10 +2213,9 @@ pub fn draw() {
         }
 
         // Cover the 32px screen margins each side (the 128px playfield is drawn 2x =
-        // 256 wide, centred in 320). Reset the camera first so the borders stay fixed.
+        // 256 wide, centred in 320) with the selected side-gradient.
         backend::camera(0, 0);
-        backend::rectfill(-20, -20, 1, 148, 0);
-        backend::rectfill(127, -20, 148, 148, 0);
+        backend::side_bars();
     }
 }
 

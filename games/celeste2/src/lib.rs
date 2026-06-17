@@ -68,6 +68,7 @@ pub fn run() {
 
     backend::upload_assets(CART);
     sfx::init(AUDIO);
+    pico8::menusfx::init(); // dedicated UI sample bank for the pause overlay
     game::init();
 
     // Drive audio off real VBlanks so the music keeps tempo when rendering can't

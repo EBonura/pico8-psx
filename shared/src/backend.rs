@@ -50,12 +50,21 @@ const FILL_CLUT: Clut = Clut::new(0, 482); // 2 entries (0 = transparent, 1 = fi
 const SCALE: i16 = 2;
 const PLAY_W: i16 = 256; // 128 * SCALE
 const OFS_X: i16 = (320 - PLAY_W) / 2; // centre horizontally -> 32
-const OFS_Y: i16 = -8; // centre the 256-tall field in 240 (clip 8 top/bottom)
+// The 256-tall field overflows the 240-line NTSC frame by 16px. OFS_Y_CENTER
+// clips 8 top + 8 bottom; "follow" mode pans the live offset V_OFS within
+// [-16, 0] to reveal the top (clip bottom) or bottom (clip top) near the player.
+const OFS_Y_CENTER: i16 = -8;
 
 // ---- Mutable PICO-8 draw state ----
 static mut CART: Cart = EMPTY_CART;
 static mut CAM_X: i16 = 0;
 static mut CAM_Y: i16 = 0;
+// Live vertical offset (eased toward V_TARGET each frame) and the follow toggle.
+// Follow is the default (reveals the top/bottom near the player); the pause menu
+// can switch back to classic centred.
+static mut V_OFS: i16 = OFS_Y_CENTER;
+static mut V_TARGET: i16 = OFS_Y_CENTER;
+static mut V_FOLLOW: bool = true;
 /// PICO-8 `pal()` colour remap (draw index -> palette index).
 static mut PAL: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
@@ -96,7 +105,50 @@ fn sx(px: i16) -> i16 {
 }
 #[inline]
 fn sy(py: i16) -> i16 {
-    (py - unsafe { CAM_Y }) * SCALE + OFS_Y
+    (py - unsafe { CAM_Y }) * SCALE + unsafe { V_OFS }
+}
+
+/// Snap the vertical offset back to centre immediately. The pause overlay calls
+/// this so its `backend`-drawn shapes line up with its own (centred) font, rather
+/// than inheriting the live follow-pan offset of the frozen game behind it.
+pub fn center_screen() {
+    unsafe {
+        V_OFS = OFS_Y_CENTER;
+        V_TARGET = OFS_Y_CENTER;
+    }
+}
+
+/// Enable/query "follow" vertical panning (a player setting, off = classic centre).
+pub fn set_screen_follow(on: bool) {
+    unsafe { V_FOLLOW = on };
+}
+pub fn screen_follow() -> bool {
+    unsafe { V_FOLLOW }
+}
+
+/// Per-frame, before drawing. `rel_py` is the player's PICO-8 row relative to the
+/// camera (player_y - camera_y, ~0..128); pass 64 (centre) when there's no player
+/// (title/menus). In follow mode the offset eases toward showing the top when the
+/// player is high or the bottom when low, with a centred deadzone + hysteresis so
+/// it stays put while the player is mid-screen. Otherwise it eases back to centre.
+pub fn track_vofs(rel_py: i16) {
+    unsafe {
+        if !V_FOLLOW {
+            V_TARGET = OFS_Y_CENTER;
+        } else if rel_py < 36 {
+            V_TARGET = 0; // player high in view -> reveal the top
+        } else if rel_py > 92 {
+            V_TARGET = -16; // player low in view -> reveal the bottom
+        } else if rel_py > 52 && rel_py < 76 {
+            V_TARGET = OFS_Y_CENTER; // back to centre only once clearly mid-screen
+        }
+        // ease 1px/frame toward the target (gaps 36..52 / 76..92 hold = hysteresis)
+        if V_OFS < V_TARGET {
+            V_OFS += 1;
+        } else if V_OFS > V_TARGET {
+            V_OFS -= 1;
+        }
+    }
 }
 
 /// Resolve a PICO-8 colour index through the `pal()` remap to RGB888.
@@ -404,6 +456,49 @@ pub fn quad(p: [(i16, i16); 4], c: i32) {
         g,
         b,
     );
+}
+
+// ---- Side-margin gradient (the 32px bars beside the 256-wide field) ----
+// (top RGB, bottom RGB) per preset. Preset 0 = solid black (the classic look).
+const SIDE_PRESETS: [((u8, u8, u8), (u8, u8, u8)); 5] = [
+    ((0, 0, 0), (0, 0, 0)),                          // Off (black)
+    ((0x22, 0x14, 0x32), (0x06, 0x04, 0x10)),        // Dusk (purple)
+    ((0x10, 0x24, 0x32), (0x04, 0x08, 0x12)),        // Ocean (teal)
+    ((0x2c, 0x12, 0x12), (0x0c, 0x04, 0x04)),        // Ember (red)
+    ((0x14, 0x22, 0x16), (0x04, 0x08, 0x06)),        // Forest (green)
+];
+static mut SIDE_PRESET: u8 = 1; // default: the Dusk gradient
+
+pub fn set_side_preset(p: u8) {
+    unsafe { SIDE_PRESET = p % SIDE_PRESETS.len() as u8 };
+}
+pub fn side_preset() -> u8 {
+    unsafe { SIDE_PRESET }
+}
+pub fn side_preset_count() -> u8 {
+    SIDE_PRESETS.len() as u8
+}
+pub fn side_preset_name(p: u8) -> &'static str {
+    match p {
+        0 => "Off",
+        1 => "Dusk",
+        2 => "Ocean",
+        3 => "Ember",
+        _ => "Forest",
+    }
+}
+
+/// Fill the two side margins (screen x 0..32 and 288..320, full 240 height) with
+/// the selected vertical gradient. Screen-space (raw GP0), independent of the
+/// camera/vertical-pan; call last in the game's draw to cover the field overdraw.
+pub fn side_bars() {
+    let (t, b) = SIDE_PRESETS[unsafe { SIDE_PRESET } as usize];
+    side_bar(0, 32, t, b);
+    side_bar(288, 320, t, b);
+}
+fn side_bar(x0: i16, x1: i16, top: (u8, u8, u8), bot: (u8, u8, u8)) {
+    gpu::draw_tri_gouraud([(x0, 0), (x1, 0), (x0, 240)], [top, top, bot]);
+    gpu::draw_tri_gouraud([(x1, 0), (x0, 240), (x1, 240)], [top, bot, bot]);
 }
 
 /// PICO-8 `circfill(x,y,r,c)` -- one 1px span per row, drawn symmetrically about

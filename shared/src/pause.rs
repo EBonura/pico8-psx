@@ -75,7 +75,13 @@ impl Pause {
     }
 
     fn row_count(&self) -> u8 {
-        if self.fly { 4 } else { 3 }
+        if self.fly { 6 } else { 5 }
+    }
+    fn screen_row(&self) -> u8 {
+        if self.fly { 3 } else { 2 }
+    }
+    fn borders_row(&self) -> u8 {
+        self.screen_row() + 1
     }
     fn quit_row(&self) -> u8 {
         self.row_count() - 1
@@ -91,6 +97,9 @@ impl Pause {
         if pressed & START != 0 {
             return Some(Exit::Resume);
         }
+        if pressed & (UP | DOWN) != 0 {
+            crate::menusfx::play(crate::menusfx::SFX_NAV);
+        }
         if pressed & UP != 0 {
             self.sel = (self.sel + count - 1) % count;
         }
@@ -105,27 +114,47 @@ impl Pause {
         } else {
             0
         };
-        if self.fly && self.sel == ROW_FLY && dir != 0 {
-            crate::debug::set_fly(dir > 0); // right = on, left = off
-        } else if dir != 0 {
-            match self.sel {
-                ROW_SFX => {
-                    let v = (sfx::sfx_volume() as i32 + dir).clamp(0, 8) as u16;
-                    sfx::set_sfx_volume(v);
-                    sfx::play(self.blip);
+        if dir != 0 {
+            if self.fly && self.sel == ROW_FLY {
+                crate::debug::set_fly(dir > 0); // right = on, left = off
+                crate::menusfx::play(crate::menusfx::SFX_NAV);
+            } else if self.sel == self.screen_row() {
+                backend::set_screen_follow(dir > 0); // right = follow, left = centre
+                crate::menusfx::play(crate::menusfx::SFX_NAV);
+            } else if self.sel == self.borders_row() {
+                let n = backend::side_preset_count() as i32;
+                let cur = backend::side_preset() as i32;
+                backend::set_side_preset((cur + dir).rem_euclid(n) as u8);
+                crate::menusfx::play(crate::menusfx::SFX_NAV);
+            } else {
+                match self.sel {
+                    ROW_SFX => {
+                        let v = (sfx::sfx_volume() as i32 + dir).clamp(0, 8) as u16;
+                        sfx::set_sfx_volume(v);
+                        sfx::play(self.blip);
+                    }
+                    ROW_MUSIC => {
+                        let v = (sfx::music_volume() as i32 + dir).clamp(0, 8) as u16;
+                        sfx::set_music_volume(v);
+                    }
+                    _ => {}
                 }
-                ROW_MUSIC => {
-                    let v = (sfx::music_volume() as i32 + dir).clamp(0, 8) as u16;
-                    sfx::set_music_volume(v);
-                }
-                _ => {}
             }
         }
 
         if pressed & CONFIRM != 0 {
             if self.fly && self.sel == ROW_FLY {
                 crate::debug::toggle_fly();
+                crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
+            } else if self.sel == self.screen_row() {
+                backend::set_screen_follow(!backend::screen_follow());
+                crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
+            } else if self.sel == self.borders_row() {
+                let n = backend::side_preset_count();
+                backend::set_side_preset((backend::side_preset() + 1) % n);
+                crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
             } else if self.sel == self.quit_row() {
+                crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
                 return Some(Exit::QuitToMenu);
             }
         }
@@ -136,13 +165,16 @@ impl Pause {
     /// Coordinates are PICO-8 128-space; the caller should have camera at (0,0).
     pub fn draw(&self) {
         backend::camera(0, 0);
+        backend::center_screen(); // overlay is centred; ignore the game's follow-pan
         let fly = self.fly;
 
         // row + panel geometry (grows by one row + a hint line when fly is shown)
         let sfx_y = 42i16;
         let music_y = 54i16;
         let fly_y = 66i16;
-        let quit_y = if fly { 82 } else { 70 };
+        let screen_y = if fly { 78 } else { 66 };
+        let borders_y = screen_y + 12;
+        let quit_y = borders_y + 12;
         let footer_y = quit_y + 13;
         let hint_y = footer_y + 9;
         let bottom = if fly { hint_y + 8 } else { footer_y + 8 };
@@ -151,13 +183,16 @@ impl Pause {
         backend::rectfill(12, 22, 115, bottom, 7);
         backend::rectfill(13, 23, 114, bottom - 1, 0);
         backend::rectfill(13, 23, 114, 33, 13);
-        self.text_center(25, "Paused", T_WHITE);
+        // "Paused" with a white -> lavender gradient (matches the title bar)
+        self.text_center_gradient(27, "Paused", (0x80, 0x80, 0x80), (0x52, 0x46, 0x74));
 
         // selection highlight bar + cursor
         let sel_y = match self.sel {
             ROW_SFX => sfx_y,
             ROW_MUSIC => music_y,
             r if fly && r == ROW_FLY => fly_y,
+            r if r == self.screen_row() => screen_y,
+            r if r == self.borders_row() => borders_y,
             _ => quit_y,
         };
         backend::rectfill(15, sel_y - 2, 112, sel_y + 6, 1);
@@ -168,18 +203,33 @@ impl Pause {
 
         if fly {
             let lit = self.sel == ROW_FLY;
-            draw_tri(27, fly_y, 11); // green PS1-triangle icon
-            self.text(34, fly_y, "Fly", if lit { T_WHITE } else { T_GREY });
+            self.text(28, fly_y, "Fly", if lit { T_WHITE } else { T_GREY });
             let on = crate::debug::fly_enabled();
             self.text(92, fly_y, if on { "On" } else { "Off" }, if on { T_GREEN } else { T_DIM });
+        }
+
+        // screen mode toggle (vertical pan vs classic centre)
+        {
+            let lit = self.sel == self.screen_row();
+            self.text(28, screen_y, "Screen", if lit { T_WHITE } else { T_GREY });
+            let follow = backend::screen_follow();
+            self.text(74, screen_y, if follow { "Follow" } else { "Center" }, if lit { T_WHITE } else { T_GREY });
+        }
+
+        // side-margin gradient preset
+        {
+            let lit = self.sel == self.borders_row();
+            self.text(28, borders_y, "Borders", if lit { T_WHITE } else { T_GREY });
+            let name = backend::side_preset_name(backend::side_preset());
+            self.text(74, borders_y, name, if lit { T_WHITE } else { T_GREY });
         }
 
         let quit_t = if self.sel == self.quit_row() { T_WHITE } else { T_GREY };
         self.text(28, quit_y, "Quit to Menu", quit_t);
 
         self.text_center(footer_y, "Start = Resume", T_GREY);
-        if fly {
-            // "Hold <tri> to Fly" -- spell out the activation button
+        if fly && crate::debug::fly_enabled() {
+            // shown only while fly is active: "Hold <tri> to Fly"
             self.text(40, hint_y, "Hold", T_DIM);
             draw_tri(59, hint_y, 11);
             self.text(67, hint_y, "to Fly", T_DIM);
@@ -201,15 +251,33 @@ impl Pause {
         backend::rectfill(kx - 1, y - 1, kx + 1, y + 5, if lit { 7 } else { 6 }); // handle
     }
 
+    /// Black 1px outline (4 diagonals) behind text at screen `(x, y)`, so labels
+    /// stay readable over the frozen game / coloured panel bars.
+    fn outline(&self, x: i16, y: i16, s: &str) {
+        for (dx, dy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
+            self.font.draw_text(x + dx, y + dy, s, (0, 0, 0));
+        }
+    }
+
     /// Draw text in the PSX font at PICO-8 128-space `(px, py)` (converted to screen).
     fn text(&self, px: i16, py: i16, s: &str, tint: (u8, u8, u8)) {
-        self.font.draw_text(sx(px), sy(py), s, tint);
+        let (x, y) = (sx(px), sy(py));
+        self.outline(x, y, s);
+        self.font.draw_text(x, y, s, tint);
     }
 
     /// Horizontally centre PSX-font text on the screen at 128-space row `py`.
     fn text_center(&self, py: i16, s: &str, tint: (u8, u8, u8)) {
-        let w = self.font.text_width(s) as i16;
-        self.font.draw_text(160 - w / 2, sy(py), s, tint);
+        let x = 160 - self.font.text_width(s) as i16 / 2;
+        self.outline(x, sy(py), s);
+        self.font.draw_text(x, sy(py), s, tint);
+    }
+
+    /// Centre with a top->bottom colour gradient (PSoXide gouraud-textured text).
+    fn text_center_gradient(&self, py: i16, s: &str, top: (u8, u8, u8), bottom: (u8, u8, u8)) {
+        let x = 160 - self.font.text_width(s) as i16 / 2;
+        self.outline(x, sy(py), s);
+        self.font.draw_text_gradient(x, sy(py), s, top, bottom);
     }
 }
 

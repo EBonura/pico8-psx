@@ -29,16 +29,14 @@ use assets::cover_celeste::COVER_CELESTE;
 use assets::cover_celeste2::COVER_CELESTE2;
 use assets::palette::PICO8_CLUT;
 
-use pico8::sfx;
+use pico8::{menusfx, sfx};
 use psx_font::{fonts::BASIC, FontAtlas};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
 use psx_vram::{upload_16bpp, Clut, TexDepth, Tpage, VramRect};
 
-// Menu sound effects, borrowed from Celeste's bank (see celeste::AUDIO): sfx 2 is
-// a crisp 0.1s blip for moving the cursor, sfx 3 the 0.4s dash "whoosh" for launch.
-const MENU_MOVE: i32 = 2;
-const MENU_SELECT: i32 = 3;
+// Menu SFX are dedicated CC0 one-shot samples (see pico8::menusfx), NOT in-game
+// sounds: SFX_NAV (cursor), SFX_CONFIRM (launch), SFX_TRANSITION (intro -> menu).
 
 // ---- VRAM layout -----------------------------------------------------
 // The two 320x240 framebuffers stack vertically (x 0..320, y 0..240 and
@@ -85,12 +83,14 @@ fn main() {
     psx_rt::interrupts::install_vblank_counter();
     atmos::init(); // seed the menu's cloud/particle backdrops
     show_intro(); // Bonnie Studios logo fade -> menu (once, on boot)
+    let mut first = true; // play the intro->menu transition only on the first menu
     loop {
-        match show_menu() {
+        match show_menu(first) {
             0 => celeste::run(),
             1 => celeste2::run(),
             _ => show_credits(),
         }
+        first = false;
         // The game/credits clobbered VRAM and left the GPU in its own mode; the
         // next show_menu() re-inits and re-uploads everything.
     }
@@ -138,8 +138,18 @@ fn show_intro() {
 
         fb.clear(0, 0, 0);
         draw_cover(BONNIE_TPAGE, 112, 34, (lvl, lvl, lvl));
+        // "Built with PSoXide" -- cyan->blue gradient with a sweeping sheen, faded by `lvl`.
         let tag = "Built with PSoXide";
-        font.draw_text(SCREEN_CX - text_half(&font, tag), 150, tag, (lvl, lvl, lvl));
+        draw_sheen(
+            &font,
+            SCREEN_CX - text_half(&font, tag),
+            150,
+            tag,
+            (0x68, 0x80, 0x80),
+            (0x38, 0x58, 0x80),
+            frame,
+            lvl as i32,
+        );
 
         gpu::draw_sync();
         wait_vblank();
@@ -165,6 +175,7 @@ fn show_credits() {
     const HEAD: (u8, u8, u8) = (0x80, 0x80, 0x80); // bright game name
     const LBL: (u8, u8, u8) = (0x58, 0x58, 0x60); // label
     const URL: (u8, u8, u8) = (0x38, 0x58, 0x80); // blue link
+    const PSOX: (u8, u8, u8) = (0x60, 0x80, 0x80); // "Built with PSoXide" (gradient marker)
     const DIM: (u8, u8, u8) = (0x48, 0x48, 0x54); // disclaimer
     const LINES: &[(&str, (u8, u8, u8))] = &[
         ("Celeste Classic Collection", TITLE),
@@ -173,7 +184,7 @@ fn show_credits() {
         ("Bonnie Studios", NAME),
         ("bonnie-studios.itch.io", URL),
         ("", LBL),
-        ("Built with PSoXide", LBL),
+        ("Built with PSoXide", PSOX),
         ("github.com/EBonura/PSoXide", URL),
         ("", LBL),
         ("The Original Games", SECT),
@@ -214,14 +225,24 @@ fn show_credits() {
             if !txt.is_empty() {
                 let y = top + i as i16 * LINE_H;
                 if y >= -12 && y <= 240 {
-                    font.draw_text(SCREEN_CX - text_half(&font, txt), y, txt, *col);
+                    let x = SCREEN_CX - text_half(&font, txt);
+                    // the collection title and game-name headers get gradients
+                    if *col == TITLE {
+                        ol_gradient(&font, x, y, txt, (0x80, 0x78, 0x3c), (0x60, 0x2a, 0x0c));
+                    } else if *col == HEAD {
+                        ol_gradient(&font, x, y, txt, (0x80, 0x80, 0x80), (0x3c, 0x60, 0x80));
+                    } else if *col == PSOX {
+                        draw_sheen(&font, x, y, txt, (0x68, 0x80, 0x80), (0x38, 0x58, 0x80), tick as i32, 0x80);
+                    } else {
+                        ol_text(&font, x, y, txt, *col);
+                    }
                 }
             }
         }
         // fixed footer over the scroll
         gpu::draw_quad_flat([(0, 224), (320, 224), (0, 240), (320, 240)], 8, 10, 26);
         let back = "X  Back";
-        font.draw_text(SCREEN_CX - text_half(&font, back), 226, back, (0x50, 0x50, 0x58));
+        ol_text(&font, SCREEN_CX - text_half(&font, back), 226, back, (0x50, 0x50, 0x58));
 
         tick += 1;
         if tick & 1 == 0 {
@@ -247,22 +268,35 @@ fn upload_cover_clut() {
 
 /// Show the cover menu and block until the player picks something.
 /// Returns 0 = Celeste, 1 = Celeste 2, 2 = credits (Select).
-fn show_menu() -> usize {
+fn show_menu(first: bool) -> usize {
     gpu::init(VideoMode::Ntsc, Resolution::R320X240);
     let mut fb = FrameBuffer::new(320, 240);
     gpu::set_draw_area(0, 0, 319, 239);
     gpu::set_draw_offset(0, 0);
 
     let font = upload_menu_vram();
-    sfx::init(celeste::AUDIO); // menu blips run off Celeste's sound bank
+    sfx::init(celeste::AUDIO); // inits the SPU + the SFX-volume state
+    menusfx::init(); // upload the dedicated CC0 menu sample bank
+    // intro -> menu uses the same confirm sound as launching a game; returning from
+    // a game/credits gets the softer reveal.
+    menusfx::play(if first { menusfx::SFX_CONFIRM } else { menusfx::SFX_TRANSITION });
 
     let mut sel: usize = 0;
-    // Seed `prev` with whatever is held right now so a button still down from the
-    // screen we came from doesn't read as a fresh press. Without this, pressing X
-    // for "quit to menu" in a game carries the held X into the menu and instantly
-    // re-launches the first game. A held button is voided until released + pressed.
-    let mut prev = poll_port1().buttons;
     let mut frame = 0i32; // animation clock (starfield drift, glow pulse)
+
+    // Dissolve in from black: covers the intro -> menu reveal and returning from a game.
+    for k in 0..FADE_FRAMES {
+        draw_menu_scene(&mut fb, &font, sel, frame);
+        fade_quad((255 - 255 * k / FADE_FRAMES) as u8);
+        gpu::draw_sync();
+        wait_vblank();
+        fb.swap();
+        frame = frame.wrapping_add(1);
+    }
+
+    // Seed `prev` with whatever is held now so a button still down from the screen we
+    // came from doesn't read as a fresh press (e.g. the held X from "quit to menu").
+    let mut prev = poll_port1().buttons;
 
     loop {
         let b = poll_port1().buttons;
@@ -276,66 +310,93 @@ fn show_menu() -> usize {
             sel = 1;
         }
         if sel != old_sel {
-            sfx::play(MENU_MOVE); // cursor moved
+            menusfx::play(menusfx::SFX_NAV); // cursor moved
         }
         if pressed(button::SELECT) {
-            sfx::play(MENU_MOVE);
+            menusfx::play(menusfx::SFX_NAV);
             return 2; // open the credits screen
         }
         if pressed(button::CROSS) || pressed(button::START) {
-            // Play the launch blip and hold a few frames so it's heard before the
-            // game boots and clobbers the SPU.
-            sfx::play(MENU_SELECT);
-            for _ in 0..18 {
-                sfx::update();
-                wait_vblank();
-            }
+            // Launch sound, then dissolve to black before the game boots (this also
+            // gives the sound time to be heard before the SPU is clobbered).
+            menusfx::play(menusfx::SFX_CONFIRM);
+            fade_out(&mut fb, &font, sel, &mut frame);
             return sel;
         }
         prev = b;
 
-        // Atmospheric backdrop: the selected game's own clouds + particles
-        // (Celeste 1's drifting cloud bars + dust, or Celeste 2's parallax
-        // clouds + snow), drawn in the centred playfield over a black field.
-        fb.clear(0, 0, 0);
-        atmos::draw(sel, frame);
-
-        // Covers: the selected one full-bright, the other dimmed.
-        let (t0, t1) = if sel == 0 {
-            ((0x80, 0x80, 0x80), (0x48, 0x48, 0x48))
-        } else {
-            ((0x48, 0x48, 0x48), (0x80, 0x80, 0x80))
-        };
-        draw_cover(COVER1_TPAGE, COVER1_X, COVER_Y, t0);
-        draw_cover(COVER2_TPAGE, COVER2_X, COVER_Y, t1);
-
-        // Selection tracer: a comet that runs around the chosen cover.
-        let sel_x = if sel == 0 { COVER1_X } else { COVER2_X };
-        atmos::draw_tracer(sel_x, COVER_Y, COVER_W, frame);
-
-        // Title, per-cover labels, and the controls hints.
-        let title = "Celeste Classic Collection";
-        font.draw_text(SCREEN_CX - text_half(&font, title), 20, title, (0x80, 0x74, 0x30));
-
-        let (l0, l1) = if sel == 0 {
-            ((0x80, 0x80, 0x80), (0x44, 0x44, 0x44))
-        } else {
-            ((0x44, 0x44, 0x44), (0x80, 0x80, 0x80))
-        };
-        font.draw_text(CENTER1 - text_half(&font, "Celeste"), 166, "Celeste", l0);
-        font.draw_text(CENTER2 - text_half(&font, "Celeste 2"), 166, "Celeste 2", l1);
-
-        let hint = "D-Pad  Select        X  Play";
-        font.draw_text(SCREEN_CX - text_half(&font, hint), 210, hint, (0x60, 0x60, 0x60));
-
-        let hint2 = "Select: Credits";
-        font.draw_text(SCREEN_CX - text_half(&font, hint2), 222, hint2, (0x48, 0x48, 0x58));
-
-        sfx::update(); // advance the SPU sequencer so menu blips play out
+        draw_menu_scene(&mut fb, &font, sel, frame);
+        sfx::update(); // keep the SPU sequencer ticking
         gpu::draw_sync();
         wait_vblank();
         fb.swap();
         frame = frame.wrapping_add(1);
+    }
+}
+
+/// Number of frames for the menu dissolve in/out.
+const FADE_FRAMES: i32 = 16;
+
+/// Draw one full menu frame (backdrop, covers, tracer, title, labels, hint) into
+/// the back buffer. The caller adds any fade overlay, then presents.
+fn draw_menu_scene(fb: &mut FrameBuffer, font: &FontAtlas, sel: usize, frame: i32) {
+    fb.clear(0, 0, 0);
+    atmos::draw(sel, frame);
+
+    let (t0, t1) = if sel == 0 {
+        ((0x80, 0x80, 0x80), (0x48, 0x48, 0x48))
+    } else {
+        ((0x48, 0x48, 0x48), (0x80, 0x80, 0x80))
+    };
+    draw_cover(COVER1_TPAGE, COVER1_X, COVER_Y, t0);
+    draw_cover(COVER2_TPAGE, COVER2_X, COVER_Y, t1);
+
+    let sel_x = if sel == 0 { COVER1_X } else { COVER2_X };
+    atmos::draw_tracer(sel_x, COVER_Y, COVER_W, frame);
+
+    let title = "Celeste Classic Collection";
+    draw_sheen(
+        font,
+        SCREEN_CX - text_half(font, title),
+        20,
+        title,
+        (0x80, 0x78, 0x3c),
+        (0x60, 0x2a, 0x0c),
+        frame,
+        0x80,
+    );
+
+    let icy_top = (0x80, 0x80, 0x80);
+    let icy_bot = (0x3c, 0x60, 0x80);
+    let dim = (0x44, 0x44, 0x4c);
+    if sel == 0 {
+        ol_gradient(font, CENTER1 - text_half(font, "Celeste"), 166, "Celeste", icy_top, icy_bot);
+        ol_text(font, CENTER2 - text_half(font, "Celeste 2"), 166, "Celeste 2", dim);
+    } else {
+        ol_text(font, CENTER1 - text_half(font, "Celeste"), 166, "Celeste", dim);
+        ol_gradient(font, CENTER2 - text_half(font, "Celeste 2"), 166, "Celeste 2", icy_top, icy_bot);
+    }
+
+    let hint2 = "Select: Credits";
+    ol_text(font, SCREEN_CX - text_half(font, hint2), 212, hint2, (0x48, 0x48, 0x58));
+}
+
+/// Full-screen subtractive grey quad: `background - (g,g,g)`, a linear darken.
+fn fade_quad(g: u8) {
+    use psx_gpu::material::BlendMode;
+    gpu::draw_tri_flat_blended([(0, 0), (320, 0), (0, 240)], g, g, g, BlendMode::Subtract);
+    gpu::draw_tri_flat_blended([(320, 0), (0, 240), (320, 240)], g, g, g, BlendMode::Subtract);
+}
+
+/// Dissolve the menu to black over `FADE_FRAMES` (when leaving for a game).
+fn fade_out(fb: &mut FrameBuffer, font: &FontAtlas, sel: usize, frame: &mut i32) {
+    for k in 1..=FADE_FRAMES {
+        draw_menu_scene(fb, font, sel, *frame);
+        fade_quad((255 * k / FADE_FRAMES) as u8);
+        gpu::draw_sync();
+        wait_vblank();
+        fb.swap();
+        *frame = frame.wrapping_add(1);
     }
 }
 
@@ -365,4 +426,54 @@ fn draw_cover(tpage: Tpage, x: i16, y: i16, tint: (u8, u8, u8)) {
 #[inline]
 fn text_half(font: &FontAtlas, s: &str) -> i16 {
     (font.text_width(s) / 2) as i16
+}
+
+/// Black 1px outline (4 diagonals) behind text for readability over the backdrop.
+fn outline(font: &FontAtlas, x: i16, y: i16, s: &str) {
+    for (dx, dy) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
+        font.draw_text(x + dx, y + dy, s, (0, 0, 0));
+    }
+}
+
+/// Outlined flat text.
+fn ol_text(font: &FontAtlas, x: i16, y: i16, s: &str, tint: (u8, u8, u8)) {
+    outline(font, x, y, s);
+    font.draw_text(x, y, s, tint);
+}
+
+/// Outlined gradient text.
+fn ol_gradient(font: &FontAtlas, x: i16, y: i16, s: &str, top: (u8, u8, u8), bot: (u8, u8, u8)) {
+    outline(font, x, y, s);
+    font.draw_text_gradient(x, y, s, top, bot);
+}
+
+/// Draw `text` with a top->bottom base gradient PLUS a white "sheen" highlight
+/// that sweeps left->right over time: each glyph is lerped toward white by how
+/// close it is to a moving head, so a band of brightness travels across the word.
+fn draw_sheen(
+    font: &FontAtlas,
+    mut x: i16,
+    y: i16,
+    text: &str,
+    top: (u8, u8, u8),
+    bot: (u8, u8, u8),
+    frame: i32,
+    bright: i32, // white-point / brightness cap (0x80 = full; lower fades the whole thing)
+) {
+    outline(font, x, y, text); // black border behind the whole word, for readability
+    let span = text.chars().count() as i32 + 18; // word length + a gap before repeat
+    let head = (frame / 2).rem_euclid(span); // highlight position, advances 1 char / 2 frames
+    let mix = |c: (u8, u8, u8), t: i32| -> (u8, u8, u8) {
+        let f = |v: u8| {
+            let base = v as i32 * bright / 0x80; // dim the base colour by the fade
+            (base + (bright - base) * t / 18) as u8 // lerp toward `bright` near the head
+        };
+        (f(c.0), f(c.1), f(c.2))
+    };
+    for (i, ch) in text.char_indices() {
+        let glyph = &text[i..i + ch.len_utf8()];
+        let t = (18 - (i as i32 - head).abs() * 6).max(0); // 0..18, peaks at the head
+        font.draw_text_gradient(x, y, glyph, mix(top, t), mix(bot, t));
+        x += font.text_width(glyph) as i16; // monospace advance for this glyph
+    }
 }
