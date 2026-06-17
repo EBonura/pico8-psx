@@ -317,11 +317,11 @@ fn show_menu(first: bool) -> usize {
             menusfx::play(menusfx::SFX_NAV);
             return 2; // open the credits screen
         }
-        if pressed(button::TRIANGLE) {
+        if pressed(button::START) {
             menusfx::play(menusfx::SFX_NAV);
-            return 3; // open the settings screen
+            return 3; // open the settings menu
         }
-        if pressed(button::CROSS) || pressed(button::START) {
+        if pressed(button::CROSS) {
             // Launch sound, then dissolve to black before the game boots (this also
             // gives the sound time to be heard before the SPU is clobbered).
             menusfx::play(menusfx::SFX_CONFIRM);
@@ -382,22 +382,14 @@ fn draw_menu_scene(fb: &mut FrameBuffer, font: &FontAtlas, sel: usize, frame: i3
         ol_gradient(font, CENTER2 - text_half(font, "Celeste 2"), 166, "Celeste 2", icy_top, icy_bot);
     }
 
-    // hints: a green triangle for Settings, Select for Credits, on one centred line.
-    let h_set = "Settings";
-    let h_cred = "Select  Credits";
-    let (ws, wc) = (font.text_width(h_set) as i16, font.text_width(h_cred) as i16);
-    let (tri_w, gap) = (10i16, 18i16);
-    let mut hx = SCREEN_CX - (tri_w + ws + gap + wc) / 2;
-    draw_tri(hx, 213, (0x30, 0x90, 0x40));
-    hx += tri_w;
-    ol_text(font, hx, 212, h_set, (0x58, 0x58, 0x60));
-    hx += ws + gap;
-    ol_text(font, hx, 212, h_cred, (0x48, 0x48, 0x58));
-}
-
-/// Small up-pointing triangle (the PS1 Triangle-button glyph) for the hint line.
-fn draw_tri(x: i16, y: i16, c: (u8, u8, u8)) {
-    gpu::draw_tri_flat([(x + 3, y), (x, y + 6), (x + 6, y + 6)], c.0, c.1, c.2);
+    // hints, stacked: button names in a right-aligned column, labels left of them.
+    let bcol = (0x70, 0x68, 0x3c); // button = soft gold
+    let lcol = (0x54, 0x54, 0x5c); // label = grey
+    let (div, labx) = (150i16, 166i16);
+    ol_text(font, div - font.text_width("Start") as i16, 204, "Start", bcol);
+    ol_text(font, labx, 204, "Menu", lcol);
+    ol_text(font, div - font.text_width("Select") as i16, 216, "Select", bcol);
+    ol_text(font, labx, 216, "Credits", lcol);
 }
 
 /// Settings screen (Triangle from the menu): the same global options as the
@@ -470,7 +462,7 @@ fn show_settings() {
                 menusfx::play(menusfx::SFX_CONFIRM);
             }
         }
-        if pressed(button::CIRCLE) || pressed(button::START) || pressed(button::TRIANGLE) {
+        if pressed(button::CIRCLE) || pressed(button::START) {
             menusfx::play(menusfx::SFX_CONFIRM);
             return;
         }
