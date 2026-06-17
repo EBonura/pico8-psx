@@ -168,23 +168,31 @@ impl Pause {
         backend::center_screen(); // overlay is centred; ignore the game's follow-pan
         let fly = self.fly;
 
-        // row + panel geometry (grows by one row + a hint line when fly is shown)
-        let sfx_y = 42i16;
-        let music_y = 54i16;
-        let fly_y = 66i16;
-        let screen_y = if fly { 78 } else { 66 };
-        let borders_y = screen_y + 12;
-        let quit_y = borders_y + 12;
-        let footer_y = quit_y + 13;
-        let hint_y = footer_y + 9;
-        let bottom = if fly { hint_y + 8 } else { footer_y + 8 };
+        // Row + panel geometry, sized to the rows and centred vertically (py 64).
+        let n_rows = self.row_count() as i16;
+        let show_hint = fly && crate::debug::fly_enabled();
+        const ROW_H: i16 = 11; // row pitch
+        const HEAD: i16 = 19; // panel top -> first row (title bar + gap)
+        const FOOT_GAP: i16 = 12; // last row -> "Start = Resume" footer
+        let h = HEAD + (n_rows - 1) * ROW_H + FOOT_GAP + if show_hint { 14 } else { 6 };
+        let top = 64 - h / 2;
+        let bottom = top + h;
+        let row_y = |p: u8| top + HEAD + p as i16 * ROW_H;
+        let sfx_y = row_y(ROW_SFX);
+        let music_y = row_y(ROW_MUSIC);
+        let fly_y = row_y(ROW_FLY);
+        let screen_y = row_y(self.screen_row());
+        let borders_y = row_y(self.borders_row());
+        let quit_y = row_y(self.quit_row());
+        let footer_y = quit_y + FOOT_GAP;
+        let hint_y = footer_y + 8;
 
         // framed panel: white border, black fill, a lavender title bar
-        backend::rectfill(12, 22, 115, bottom, 7);
-        backend::rectfill(13, 23, 114, bottom - 1, 0);
-        backend::rectfill(13, 23, 114, 33, 13);
+        backend::rectfill(12, top, 115, bottom, 7);
+        backend::rectfill(13, top + 1, 114, bottom - 1, 0);
+        backend::rectfill(13, top + 1, 114, top + 11, 13);
         // "Paused" with a white -> lavender gradient (matches the title bar)
-        self.text_center_gradient(27, "Paused", (0x80, 0x80, 0x80), (0x52, 0x46, 0x74));
+        self.text_center_gradient(top + 5, "Paused", (0x80, 0x80, 0x80), (0x52, 0x46, 0x74));
 
         // selection highlight bar + cursor
         let sel_y = match self.sel {
