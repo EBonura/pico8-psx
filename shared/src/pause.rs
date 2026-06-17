@@ -187,11 +187,10 @@ impl Pause {
 
         // Row + panel geometry, sized to the rows and centred vertically (py 64).
         let n_rows = self.row_count() as i16;
-        let show_hint = fly && crate::debug::fly_enabled();
         const ROW_H: i16 = 11; // row pitch
         const HEAD: i16 = 19; // panel top -> first row (title bar + gap)
-        const FOOT_GAP: i16 = 12; // last row -> "Start = Resume" footer
-        let h = HEAD + (n_rows - 1) * ROW_H + FOOT_GAP + if show_hint { 20 } else { 10 };
+        const FOOT_GAP: i16 = 12; // last row -> "Resume" footer
+        let h = HEAD + (n_rows - 1) * ROW_H + FOOT_GAP + 10;
         let top = 64 - h / 2;
         let bottom = top + h;
         let row_y = |p: u8| top + HEAD + p as i16 * ROW_H;
@@ -203,7 +202,6 @@ impl Pause {
         let borders_y = row_y(self.borders_row());
         let quit_y = row_y(self.quit_row());
         let footer_y = quit_y + FOOT_GAP;
-        let hint_y = footer_y + 8;
 
         // framed panel: white border, black fill, a lavender title bar
         backend::rectfill(12, top, 115, bottom, 7);
@@ -231,6 +229,10 @@ impl Pause {
         if fly {
             let lit = self.sel == ROW_FLY;
             self.text(28, fly_y, "Fly", if lit { T_WHITE } else { T_GREY });
+            // the Triangle button it maps to, beside the label (matches the launcher
+            // Settings Fly row, so no separate "Hold Triangle to Fly" hint is needed)
+            let fw = self.font.text_width("Fly") as i16;
+            crate::icons::draw(&crate::icons::TRIANGLE, sx(28) + fw + 4, sy(fly_y) - 3);
             let on = crate::debug::fly_enabled();
             self.text(92, fly_y, if on { "On" } else { "Off" }, if on { T_GREEN } else { T_DIM });
         }
@@ -285,23 +287,6 @@ impl Pause {
         let tx = x0 + iw + gap;
         self.outline(tx, sy(footer_y), resume);
         self.font.draw_text(tx, sy(footer_y), resume, T_GREY);
-
-        if fly && crate::debug::fly_enabled() {
-            // shown only while fly is active: "Hold [Triangle] to Fly"
-            let ys = sy(hint_y);
-            let (hold, tofly) = ("Hold", "to Fly");
-            let wh = self.font.text_width(hold) as i16;
-            let wt = self.font.text_width(tofly) as i16;
-            let tw = crate::icons::width(&crate::icons::TRIANGLE);
-            let mut x = 160 - (wh + 5 + tw + 5 + wt) / 2;
-            self.outline(x, ys, hold);
-            self.font.draw_text(x, ys, hold, T_DIM);
-            x += wh + 5;
-            crate::icons::draw(&crate::icons::TRIANGLE, x, ys - 3);
-            x += tw + 5;
-            self.outline(x, ys, tofly);
-            self.font.draw_text(x, ys, tofly, T_DIM);
-        }
 
         backend::set_pixel_scale(game_scale); // restore the game's scale
     }
