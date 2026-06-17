@@ -385,18 +385,14 @@ fn draw_menu_scene(fb: &mut FrameBuffer, font: &FontAtlas, sel: usize, frame: i3
         ol_gradient(font, CENTER2 - text_half(font, "Celeste 2"), 166, "Celeste 2", icy_top, icy_bot);
     }
 
-    // hints, stacked: button names right-aligned to a colon divider, labels after.
-    let bcol = (0x70, 0x68, 0x3c); // button = soft gold
-    let lcol = (0x54, 0x54, 0x5c); // label = grey
-    let colon = 150i16; // the ':' column; button right-aligned to it, label after
-    let cw = font.text_width(":") as i16;
-    let labx = colon + cw + 3;
-    ol_text(font, colon - font.text_width("Start") as i16, 204, "Start", bcol);
-    ol_text(font, colon, 204, ":", lcol);
-    ol_text(font, labx, 204, "Menu", lcol);
-    ol_text(font, colon - font.text_width("Select") as i16, 216, "Select", bcol);
-    ol_text(font, colon, 216, ":", lcol);
-    ol_text(font, labx, 216, "Credits", lcol);
+    // hints, stacked: a PlayStation button glyph + the action it opens.
+    let lcol = (0x70, 0x68, 0x3c); // label = soft gold
+    let gx = 130i16; // glyph column
+    let tx = gx + 22; // label column (after the glyph)
+    glyph_start(gx, 203);
+    ol_text(font, tx, 204, "Menu", lcol);
+    glyph_select(gx, 215);
+    ol_text(font, tx, 216, "Credits", lcol);
 }
 
 /// Settings screen (Triangle from the menu): the same global options as the
@@ -522,6 +518,8 @@ fn show_settings() {
                 ),
                 4 => ol_text(&font, vx, y, backend::side_preset_name(backend::side_preset()), tint),
                 5 => {
+                    // mark the Triangle button it maps to in-game, beside the label
+                    glyph_triangle(lx + font.text_width("Fly") as i16 + 5, y);
                     let on = debug::fly_enabled();
                     let t = if on { (0x30, 0x78, 0x40) } else { tint };
                     ol_text(&font, vx, y, if on { "On" } else { "Off" }, t);
@@ -530,8 +528,10 @@ fn show_settings() {
             }
         }
 
-        let hint = "Circle  Back";
-        ol_text(&font, SCREEN_CX - text_half(&font, hint), 216, hint, (0x48, 0x48, 0x58));
+        let bw = 10 + font.text_width("Back") as i16;
+        let bx = SCREEN_CX - bw / 2;
+        glyph_circle(bx, 215);
+        ol_text(&font, bx + 13, 216, "Back", (0x60, 0x60, 0x6c));
 
         sfx::update();
         gpu::draw_sync();
@@ -616,6 +616,84 @@ fn ol_text(font: &FontAtlas, x: i16, y: i16, s: &str, tint: (u8, u8, u8)) {
 fn ol_gradient(font: &FontAtlas, x: i16, y: i16, s: &str, top: (u8, u8, u8), bot: (u8, u8, u8)) {
     outline(font, x, y, s);
     font.draw_text_gradient(x, y, s, top, bot);
+}
+
+// ---- PlayStation button glyphs ------------------------------------------
+// Drawn as GPU primitives (lines / tris), no third-party art -- consistent with
+// the in-game pause triangle. `y` is the glyph-box top, on the BASIC font's line.
+const GLY_GREEN: (u8, u8, u8) = (0x54, 0xc8, 0x74); // triangle button
+const GLY_RED: (u8, u8, u8) = (0xe0, 0x5c, 0x64); // circle button
+const GLY_PILL: (u8, u8, u8) = (0x2a, 0x2a, 0x38); // start/select body
+const GLY_EDGE: (u8, u8, u8) = (0xc0, 0xc0, 0xce); // start/select outline + inner mark
+
+#[inline]
+fn gline(x0: i16, y0: i16, x1: i16, y1: i16, c: (u8, u8, u8)) {
+    gpu::draw_line_mono(x0, y0, x1, y1, c.0, c.1, c.2);
+}
+
+/// Hollow up-pointing Triangle face button (8x8). Returns advance width.
+fn glyph_triangle(x: i16, y: i16) -> i16 {
+    let (ax, lx, rx) = (x + 4, x, x + 8);
+    gline(ax, y, lx, y + 8, GLY_GREEN);
+    gline(lx, y + 8, rx, y + 8, GLY_GREEN);
+    gline(rx, y + 8, ax, y, GLY_GREEN);
+    10
+}
+
+/// Hollow Circle face button (ring approximated by an octagon, r=4).
+fn glyph_circle(x: i16, y: i16) -> i16 {
+    const P: [(i16, i16); 8] =
+        [(4, 0), (3, 3), (0, 4), (-3, 3), (-4, 0), (-3, -3), (0, -4), (3, -3)];
+    let (cx, cy) = (x + 4, y + 4);
+    for i in 0..8 {
+        let a = P[i];
+        let b = P[(i + 1) % 8];
+        gline(cx + a.0, cy + a.1, cx + b.0, cy + b.1, GLY_RED);
+    }
+    10
+}
+
+/// Oblong pill body + outline (the Start/Select button shape), width `w`.
+fn pill(x: i16, y: i16, w: i16) {
+    let h = 8;
+    gpu::draw_quad_flat(
+        [(x + 1, y), (x + w - 1, y), (x + 1, y + h), (x + w - 1, y + h)],
+        GLY_PILL.0, GLY_PILL.1, GLY_PILL.2,
+    );
+    gpu::draw_quad_flat(
+        [(x, y + 1), (x, y + h - 1), (x + w, y + 1), (x + w, y + h - 1)],
+        GLY_PILL.0, GLY_PILL.1, GLY_PILL.2,
+    );
+    gline(x + 1, y, x + w - 1, y, GLY_EDGE);
+    gline(x + 1, y + h, x + w - 1, y + h, GLY_EDGE);
+    gline(x, y + 1, x, y + h - 1, GLY_EDGE);
+    gline(x + w, y + 1, x + w, y + h - 1, GLY_EDGE);
+}
+
+/// Start button: pill with a small play-triangle. Returns advance width.
+fn glyph_start(x: i16, y: i16) -> i16 {
+    const W: i16 = 16;
+    pill(x, y, W);
+    let (cx, cy) = (x + W / 2 - 1, y + 4);
+    gpu::draw_tri_flat(
+        [(cx - 2, cy - 3), (cx - 2, cy + 3), (cx + 3, cy)],
+        GLY_EDGE.0, GLY_EDGE.1, GLY_EDGE.2,
+    );
+    W + 2
+}
+
+/// Select button: pill with two small bars. Returns advance width.
+fn glyph_select(x: i16, y: i16) -> i16 {
+    const W: i16 = 16;
+    pill(x, y, W);
+    let cx = x + W / 2;
+    for dy in [-2i16, 1] {
+        gpu::draw_quad_flat(
+            [(cx - 3, y + 4 + dy), (cx + 3, y + 4 + dy), (cx - 3, y + 5 + dy), (cx + 3, y + 5 + dy)],
+            GLY_EDGE.0, GLY_EDGE.1, GLY_EDGE.2,
+        );
+    }
+    W + 2
 }
 
 /// Draw `text` with a top->bottom base gradient PLUS a white "sheen" highlight
