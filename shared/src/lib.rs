@@ -23,6 +23,8 @@ pub mod backend;
 pub mod debug;
 pub mod fixed;
 pub mod font;
+pub mod icons;
+mod icons_data;
 pub mod input;
 pub mod menusfx;
 pub mod palette;

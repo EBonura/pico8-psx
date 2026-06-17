@@ -71,6 +71,7 @@ impl Pause {
     /// PSX font to VRAM (call once per pause-open, which is what the games do).
     pub fn new(blip: i32, fly: bool) -> Self {
         let font = FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT);
+        crate::icons::upload();
         Pause { sel: ROW_SFX, prev: 0xFF, blip, fly, font }
     }
 
@@ -274,22 +275,32 @@ impl Pause {
         let quit_t = if self.sel == self.quit_row() { T_WHITE } else { T_GREY };
         self.text(28, quit_y, "Quit to Menu", quit_t);
 
-        // footer: the Start-button glyph + "Resume" (centred as a group)
+        // footer: the Start button icon + "Resume" (centred as a group)
         let resume = "Resume";
         let rw = self.font.text_width(resume) as i16; // screen px
-        const PILL_W: i16 = 28; // 14 units at 2x
-        const GAP: i16 = 6;
-        let x0 = 160 - (PILL_W + GAP + rw) / 2; // screen x
-        draw_start((x0 - 32) / 2, footer_y); // glyph in 128-space
-        let tx = x0 + PILL_W + GAP;
+        let iw = crate::icons::width(&crate::icons::START);
+        let gap = 5;
+        let x0 = 160 - (iw + gap + rw) / 2; // screen x
+        crate::icons::draw(&crate::icons::START, x0, sy(footer_y) - 3);
+        let tx = x0 + iw + gap;
         self.outline(tx, sy(footer_y), resume);
         self.font.draw_text(tx, sy(footer_y), resume, T_GREY);
 
         if fly && crate::debug::fly_enabled() {
-            // shown only while fly is active: "Hold <tri> to Fly"
-            self.text(40, hint_y, "Hold", T_DIM);
-            draw_tri(59, hint_y, 11);
-            self.text(67, hint_y, "to Fly", T_DIM);
+            // shown only while fly is active: "Hold [Triangle] to Fly"
+            let ys = sy(hint_y);
+            let (hold, tofly) = ("Hold", "to Fly");
+            let wh = self.font.text_width(hold) as i16;
+            let wt = self.font.text_width(tofly) as i16;
+            let tw = crate::icons::width(&crate::icons::TRIANGLE);
+            let mut x = 160 - (wh + 5 + tw + 5 + wt) / 2;
+            self.outline(x, ys, hold);
+            self.font.draw_text(x, ys, hold, T_DIM);
+            x += wh + 5;
+            crate::icons::draw(&crate::icons::TRIANGLE, x, ys - 3);
+            x += tw + 5;
+            self.outline(x, ys, tofly);
+            self.font.draw_text(x, ys, tofly, T_DIM);
         }
 
         backend::set_pixel_scale(game_scale); // restore the game's scale
@@ -325,13 +336,6 @@ impl Pause {
         self.font.draw_text(x, y, s, tint);
     }
 
-    /// Horizontally centre PSX-font text on the screen at 128-space row `py`.
-    fn text_center(&self, py: i16, s: &str, tint: (u8, u8, u8)) {
-        let x = 160 - self.font.text_width(s) as i16 / 2;
-        self.outline(x, sy(py), s);
-        self.font.draw_text(x, sy(py), s, tint);
-    }
-
     /// Centre with a top->bottom colour gradient (PSoXide gouraud-textured text).
     fn text_center_gradient(&self, py: i16, s: &str, top: (u8, u8, u8), bottom: (u8, u8, u8)) {
         let x = 160 - self.font.text_width(s) as i16 / 2;
@@ -340,19 +344,3 @@ impl Pause {
     }
 }
 
-/// The PlayStation Triangle face-button glyph: a small hollow up-pointing
-/// triangle outline (~7x6 px) in the button's teal-green, the authentic icon
-/// rather than a flat blob. Two nested tris (a doubled last vertex collapses
-/// each quad to a triangle): the outer in colour `c`, an inner cut in black.
-fn draw_tri(x: i16, y: i16, c: i32) {
-    backend::quad([(x + 3, y), (x, y + 6), (x + 6, y + 6), (x + 6, y + 6)], c);
-    backend::quad([(x + 3, y + 2), (x + 1, y + 5), (x + 5, y + 5), (x + 5, y + 5)], 0);
-}
-
-/// PlayStation Start button glyph: a small grey pill (14x7, 128-space) with a
-/// white play-triangle, drawn in PICO-8 128-space like [`draw_tri`].
-fn draw_start(x: i16, y: i16) {
-    backend::rectfill(x, y, x + 13, y + 6, 6); // light edge
-    backend::rectfill(x + 1, y + 1, x + 12, y + 5, 5); // grey body
-    backend::quad([(x + 5, y + 1), (x + 5, y + 5), (x + 9, y + 3), (x + 9, y + 3)], 7); // play
-}
