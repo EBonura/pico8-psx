@@ -29,7 +29,7 @@ use assets::cover_celeste::COVER_CELESTE;
 use assets::cover_celeste2::COVER_CELESTE2;
 use assets::palette::PICO8_CLUT;
 
-use pico8::{backend, menusfx, sfx};
+use pico8::{backend, debug, menusfx, sfx};
 use psx_font::{fonts::BASIC, FontAtlas};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
@@ -411,7 +411,7 @@ fn show_settings() {
     sfx::init(celeste::AUDIO);
     menusfx::init();
 
-    const N: usize = 5; // SFX, Music, Pixel, Screen, Borders
+    const N: usize = 6; // SFX, Music, Pixel, Screen, Borders, Fly
     let mut sel = 0usize;
     let mut prev = poll_port1().buttons;
     let mut frame = 0i32;
@@ -448,6 +448,7 @@ fn show_settings() {
                     let c = backend::side_preset() as i32;
                     backend::set_side_preset((c + dir).rem_euclid(n) as u8);
                 }
+                5 => debug::set_fly(dir > 0), // right = on, left = off
                 _ => changed = false,
             }
             if changed {
@@ -463,6 +464,7 @@ fn show_settings() {
                     let n = backend::side_preset_count();
                     backend::set_side_preset((backend::side_preset() + 1) % n);
                 }
+                5 => debug::set_fly(!debug::fly_enabled()),
                 _ => changed = false,
             }
             if changed {
@@ -481,7 +483,7 @@ fn show_settings() {
         let title = "Settings";
         draw_sheen(&font, SCREEN_CX - text_half(&font, title), 24, title, (0x80, 0x78, 0x3c), (0x60, 0x2a, 0x0c), frame, 0x80);
 
-        const ROWS: [&str; N] = ["SFX", "Music", "Pixel", "Screen", "Borders"];
+        const ROWS: [&str; N] = ["SFX", "Music", "Pixel", "Screen", "Borders", "Fly"];
         const Y0: i16 = 74;
         const RH: i16 = 22;
         let (lx, vx) = (84i16, 188i16);
@@ -519,6 +521,11 @@ fn show_settings() {
                     tint,
                 ),
                 4 => ol_text(&font, vx, y, backend::side_preset_name(backend::side_preset()), tint),
+                5 => {
+                    let on = debug::fly_enabled();
+                    let t = if on { (0x30, 0x78, 0x40) } else { tint };
+                    ol_text(&font, vx, y, if on { "On" } else { "Off" }, t);
+                }
                 _ => {}
             }
         }
