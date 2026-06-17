@@ -21,7 +21,7 @@ static mut NEXT: usize = 0;
 /// (which does `spu::init`); re-call if the SPU is re-initialised (e.g. the
 /// launcher after returning from a game).
 pub fn init() {
-    spu::upload_adpcm(SpuAddr::new(SPU_BASE), &MENU_SFX_ADPCM);
+    spu::upload_adpcm(SpuAddr::new(SPU_BASE), &MENU_SFX_ADPCM.0);
 }
 
 /// Fire menu sound `id` (`SFX_NAV` / `SFX_CONFIRM` / `SFX_TRANSITION`). Volume is
