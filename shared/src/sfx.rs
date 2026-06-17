@@ -202,22 +202,46 @@ static mut WAVEFORM_ADDR_LONG: [u32; 8] = [0; 8]; // long (8x) tonal wavetables
 static mut MUSIC_GAIN: u16 = 8;
 static mut SFX_GAIN: u16 = 8;
 
+// Last pre-gain volume written per voice (0..15), so a gain change can be
+// re-applied to currently-playing voices immediately rather than only on their
+// next note (otherwise lowering a slider leaves sustaining/looping voices, e.g.
+// the music drums, audible until they re-key).
+static mut LAST_VOL: [i16; 16] = [0; 16];
+
 /// Write voice `v`'s SPU volume (same L/R), scaled by its group's master gain.
 /// `v` may be a phaser buddy (v+8); `v & 7` folds buddies back onto their owner,
 /// and voices 0..3 are music, 4..7 are SFX.
 unsafe fn apply_vol(v: usize, vol: i16) {
+    LAST_VOL[v & 0xF] = vol;
     let gain = if (v & 7) < SFX_VOICE_BASE { MUSIC_GAIN } else { SFX_GAIN } as i32;
     let scaled = (vol as i32 * gain / 8) as i16;
     Voice::new(v as u8).set_volume(Volume(scaled), Volume(scaled));
 }
 
+/// Re-scale the four voices of a bus (+ their phaser buddies) by the current
+/// gain, using each voice's last pre-gain level -- so a slider change is instant.
+unsafe fn reapply_bus(sfx_bus: bool) {
+    let base = if sfx_bus { SFX_VOICE_BASE } else { 0 };
+    for i in 0..NUM_SFX_VOICES {
+        let v = base + i;
+        apply_vol(v, LAST_VOL[v]);
+        apply_vol(v + PHASER_BUDDY, LAST_VOL[v + PHASER_BUDDY]);
+    }
+}
+
 /// Set the master volume for the music bus (voices 0..3). `eighths` 0..=8.
 pub fn set_music_volume(eighths: u16) {
-    unsafe { MUSIC_GAIN = eighths.min(8) }
+    unsafe {
+        MUSIC_GAIN = eighths.min(8);
+        reapply_bus(false);
+    }
 }
 /// Set the master volume for the SFX bus (voices 4..7). `eighths` 0..=8.
 pub fn set_sfx_volume(eighths: u16) {
-    unsafe { SFX_GAIN = eighths.min(8) }
+    unsafe {
+        SFX_GAIN = eighths.min(8);
+        reapply_bus(true);
+    }
 }
 /// Current music master volume in eighths (0..=8), for the pause-menu display.
 pub fn music_volume() -> u16 {
