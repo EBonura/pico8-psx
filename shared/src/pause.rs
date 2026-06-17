@@ -179,6 +179,8 @@ impl Pause {
         let game_scale = backend::pixel_scale();
         backend::set_pixel_scale(2); // also centres V_OFS at the 2x centre (-8)
         backend::camera(0, 0);
+        backend::pal_reset(); // the frozen game may have left a pal() remap; the
+                              // overlay must draw with the canonical PICO-8 palette
         let fly = self.fly;
         let scale1x = game_scale == 1; // 1x never clips -> the Screen row is greyed
 
@@ -188,7 +190,7 @@ impl Pause {
         const ROW_H: i16 = 11; // row pitch
         const HEAD: i16 = 19; // panel top -> first row (title bar + gap)
         const FOOT_GAP: i16 = 12; // last row -> "Start = Resume" footer
-        let h = HEAD + (n_rows - 1) * ROW_H + FOOT_GAP + if show_hint { 14 } else { 6 };
+        let h = HEAD + (n_rows - 1) * ROW_H + FOOT_GAP + if show_hint { 20 } else { 10 };
         let top = 64 - h / 2;
         let bottom = top + h;
         let row_y = |p: u8| top + HEAD + p as i16 * ROW_H;
@@ -272,7 +274,17 @@ impl Pause {
         let quit_t = if self.sel == self.quit_row() { T_WHITE } else { T_GREY };
         self.text(28, quit_y, "Quit to Menu", quit_t);
 
-        self.text_center(footer_y, "Start = Resume", T_GREY);
+        // footer: the Start-button glyph + "Resume" (centred as a group)
+        let resume = "Resume";
+        let rw = self.font.text_width(resume) as i16; // screen px
+        const PILL_W: i16 = 28; // 14 units at 2x
+        const GAP: i16 = 6;
+        let x0 = 160 - (PILL_W + GAP + rw) / 2; // screen x
+        draw_start((x0 - 32) / 2, footer_y); // glyph in 128-space
+        let tx = x0 + PILL_W + GAP;
+        self.outline(tx, sy(footer_y), resume);
+        self.font.draw_text(tx, sy(footer_y), resume, T_GREY);
+
         if fly && crate::debug::fly_enabled() {
             // shown only while fly is active: "Hold <tri> to Fly"
             self.text(40, hint_y, "Hold", T_DIM);
@@ -335,4 +347,12 @@ impl Pause {
 fn draw_tri(x: i16, y: i16, c: i32) {
     backend::quad([(x + 3, y), (x, y + 6), (x + 6, y + 6), (x + 6, y + 6)], c);
     backend::quad([(x + 3, y + 2), (x + 1, y + 5), (x + 5, y + 5), (x + 5, y + 5)], 0);
+}
+
+/// PlayStation Start button glyph: a small grey pill (14x7, 128-space) with a
+/// white play-triangle, drawn in PICO-8 128-space like [`draw_tri`].
+fn draw_start(x: i16, y: i16) {
+    backend::rectfill(x, y, x + 13, y + 6, 6); // light edge
+    backend::rectfill(x + 1, y + 1, x + 12, y + 5, 5); // grey body
+    backend::quad([(x + 5, y + 1), (x + 5, y + 5), (x + 9, y + 3), (x + 9, y + 3)], 7); // play
 }

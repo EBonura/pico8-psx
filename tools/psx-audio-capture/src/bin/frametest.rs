@@ -85,6 +85,25 @@ fn main() {
         })
         .unwrap_or((0, -1));
 
+    // --script "F:MASK,F:MASK,...": a held-button timeline. The active mask is the
+    // last entry whose frame <= the current frame (a 0 mask releases). Lets a run
+    // drive multi-step menu paths (e.g. open settings, toggle a row, launch, pause).
+    let script: Vec<(u32, u16)> = arg("--script")
+        .map(|s| {
+            let mut v: Vec<(u32, u16)> = s
+                .split(',')
+                .filter_map(|e| {
+                    let (f, m) = e.split_once(':')?;
+                    let f = f.trim().parse::<u32>().ok()?;
+                    let m = u16::from_str_radix(m.trim().trim_start_matches("0x"), 16).ok()?;
+                    Some((f, m))
+                })
+                .collect();
+            v.sort_by_key(|e| e.0);
+            v
+        })
+        .unwrap_or_default();
+
     // --profile [--profile-from FRAME]: sample the CPU PC every instruction into
     // a flat histogram (RAM base 0x80010000), dump the hottest addresses at the
     // end. Map those to functions with the ELF symbol table.
@@ -100,6 +119,9 @@ fn main() {
     for frame in 0..frames {
         // Decide this frame's held buttons.
         let mut mask = hold;
+        if let Some(&(_, m)) = script.iter().rev().find(|&&(f, _)| frame as u32 >= f) {
+            mask |= m;
+        }
         if press_at >= 0 && frame as i64 >= press_at && frame as i64 <= press_at + 24 {
             mask |= press_mask; // hold the start press ~0.4s then release
         }
