@@ -111,9 +111,23 @@ fn rgb(c: i32) -> (u8, u8, u8) {
 // Sprite / map
 // --------------------------------------------------------------------
 
+/// A 16x16 primitive at screen `(x,y)` is fully outside the 320x240 frame.
+/// The GP0 vertex word is 11-bit signed, so a primitive at screen x >= 1024
+/// wraps to the left edge: a wide level's far-right objects (e.g. celeste2
+/// level-3 spikes at col 123) reappear as "floating" sprites on the left when
+/// the camera sits near the level's left edge. PICO-8's spr()/map() clip to the
+/// screen; we must cull here so the wrap can never happen.
+#[inline]
+fn offscreen16(x: i16, y: i16) -> bool {
+    x <= -16 || x >= 320 || y <= -16 || y >= 240
+}
+
 /// Raw 16x16 textured-rect blit (GP0 0x64). Tpage must already be set.
 #[inline]
 fn blit16(x: i16, y: i16, u0: u8, v0: u8, clut_word: u16) {
+    if offscreen16(x, y) {
+        return;
+    }
     wait_cmd_ready();
     write_gp0(0x6400_0000 | pack_color(0x80, 0x80, 0x80));
     write_gp0(pack_vertex(x, y));
@@ -132,6 +146,9 @@ pub fn spr(n: i32, x: i16, y: i16, flip_x: bool, flip_y: bool) {
     let v0 = ((n / 16) * 16) as u8;
     let px = sx(x);
     let py = sy(y);
+    if offscreen16(px, py) {
+        return; // cull before the GP0 11-bit vertex can wrap onto the screen
+    }
     let clut_word = SPRITE_CLUT.uv_clut_word();
 
     if !flip_x && !flip_y {

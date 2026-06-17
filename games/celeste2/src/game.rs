@@ -1793,8 +1793,11 @@ unsafe fn camera_target() -> (i32, i32) {
     let lv = level();
     let wlim = LVL_W * 8 - 128;
     let hlim = LVL_H * 8 - 128;
-    // The PICO-8 modes use max(min(wlim, ..)) -- ceiling only, no floor -- except
-    // modes 1/4/5/7/8 which clamp the floor; replicated below.
+    // PICO-8's `max(v)` / `min(v)` default the second arg to 0, so the cart's
+    // `max(min(wlim, ..))` clamps to [0, wlim] -- a floor of 0, NOT "no floor".
+    // Every mode below therefore floors the target at 0 (`.max(0)`); without it the
+    // camera drifts past the level's left/top edge (e.g. trailhead spawn -> CAM_X
+    // -44), exposing the off-map border and wrapping far-side sprites onto screen.
     let mut tx;
     let mut ty = 0;
     match CAM_MODE {
@@ -1803,10 +1806,10 @@ unsafe fn camera_target() -> (i32, i32) {
         }
         2 => {
             tx = if px < 120 { 0 } else if px > 136 { 128 } else { px - 64 };
-            ty = (py - 64).min(hlim);
+            ty = (py - 64).min(hlim).max(0);
         }
         3 => {
-            tx = (px - 56).min(wlim);
+            tx = (px - 56).min(wlim).max(0);
             if lv.barrier_x >= 0 {
                 camera_x_barrier(lv.barrier_x, px, &mut tx);
             }
@@ -1815,11 +1818,11 @@ unsafe fn camera_target() -> (i32, i32) {
         4 => {
             let sx = if px % 128 > 8 && px % 128 < 120 { (px / 128) * 128 + 64 } else { px };
             let sy = if py % 128 > 4 && py % 128 < 124 { (py / 128) * 128 + 64 } else { py };
-            tx = (sx - 64).min(wlim);
-            ty = (sy - 64).min(hlim);
+            tx = (sx - 64).min(wlim).max(0);
+            ty = (sy - 64).min(hlim).max(0);
         }
         5 => {
-            tx = (px - 32).min(wlim);
+            tx = (px - 32).min(wlim).max(0);
         }
         6 => {
             if px > 848 {
@@ -1831,7 +1834,7 @@ unsafe fn camera_target() -> (i32, i32) {
                 C_FLAG = true;
                 C_OFFSET = 96;
             }
-            tx = (px - C_OFFSET).min(wlim);
+            tx = (px - C_OFFSET).min(wlim).max(0);
             if lv.barrier_x >= 0 {
                 camera_x_barrier(lv.barrier_x, px, &mut tx);
             }
@@ -1858,7 +1861,7 @@ unsafe fn camera_target() -> (i32, i32) {
             ty = (py - 32).max(0).min(hlim);
         }
         _ => {
-            tx = (px - 64).min(wlim);
+            tx = (px - 64).min(wlim).max(0);
         }
     }
     (tx, ty)
@@ -2143,7 +2146,11 @@ pub fn draw() {
         let cam_row = CAM_Y / 8;
         let cols = 18.min(LVL_W - cam_col);
         let rows = 18.min(LVL_H - cam_row);
-        backend::map(cam_col, cam_row, (cam_col * 8) as i16, (cam_row * 8) as i16, cols, rows, 0);
+        // Base terrain pass: only flag-0 tiles, matching the cart's map loop
+        // (`if fget(tile,0) then spr(...)`). Mask 0 would draw EVERY non-zero tile,
+        // including object-spawn tiles (spawners spr=-1, grappler, checkpoint, ...),
+        // leaving static "ghost" tiles the cart never draws.
+        backend::map(cam_col, cam_row, (cam_col * 8) as i16, (cam_row * 8) as i16, cols, rows, 1);
         // per-level palette swap: overdraw the flag-7 tiles with the swap applied
         if lv.pal_id != 0 {
             backend::flush(); // let the base tiles finish with the unswapped CLUT
