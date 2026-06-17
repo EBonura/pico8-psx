@@ -167,6 +167,7 @@ fn show_credits() {
     gpu::set_draw_area(0, 0, 319, 239);
     gpu::set_draw_offset(0, 0);
     let font = FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT);
+    icons::upload();
     sfx::init(celeste::AUDIO);
 
     // (text, RGB tint). 0x80 == full brightness. Empty lines are spacers.
@@ -245,8 +246,11 @@ fn show_credits() {
         }
         // fixed footer over the scroll
         gpu::draw_quad_flat([(0, 224), (320, 224), (0, 240), (320, 240)], 8, 10, 26);
-        let back = "X  Back";
-        ol_text(&font, SCREEN_CX - text_half(&font, back), 226, back, (0x50, 0x50, 0x58));
+        let cw = icons::width(&icons::CROSS);
+        let bw = cw + 4 + font.text_width("Back") as i16;
+        let bx = SCREEN_CX - bw / 2;
+        icons::draw(&icons::CROSS, bx, 224);
+        ol_text(&font, bx + cw + 4, 226, "Back", (0x58, 0x58, 0x60));
 
         tick += 1;
         if tick & 1 == 0 {

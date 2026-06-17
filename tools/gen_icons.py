@@ -22,11 +22,20 @@ H = 14  # icon height in screen px
 CROPS = {
     "triangle": (92, 130, 285, 327, 6),
     "circle":   (384, 130, 578, 327, 6),
+    "cross":    (675, 130, 869, 327, 6),
     "start":    (366, 709, 515, 851, 14),
     "select":   (714, 746, 879, 830, 16),
 }
 
 src = Image.open(SRC).convert("RGB")
+
+
+def boost(rgb):
+    """Make the icons feel alive: lift saturation and brightness."""
+    luma = rgb @ np.array([0.299, 0.587, 0.114])
+    rgb = luma[..., None] + (rgb - luma[..., None]) * 1.7  # saturation
+    rgb = rgb * 1.45 + 12  # brightness / gain
+    return np.clip(rgb, 0, 255)
 
 
 def prep(box):
@@ -38,7 +47,7 @@ def prep(box):
     a = np.array(c).astype(float)
     bright = a.sum(2) / 3
     alpha = np.clip((215 - bright) / 175, 0, 1)  # 0 on light bg, 1 on dark icon
-    rgb = a * alpha[:, :, None]  # composite over black
+    rgb = boost(a * alpha[:, :, None])  # composite over black, then liven up
     return rgb.astype(int), alpha, w, h
 
 
@@ -53,7 +62,7 @@ def to_bgr555(r, g, b, opaque):
 cells = {}
 atlas_rows = []  # list of (list-of-(name,rgb,alpha,w,h)) packed per row
 cur, curw = [], 0
-order = ["triangle", "circle", "start", "select"]
+order = ["triangle", "circle", "cross", "start", "select"]
 prepared = {k: prep(CROPS[k]) for k in order}
 for k in order:
     rgb, alpha, w, h = prepared[k]

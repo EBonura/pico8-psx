@@ -12,7 +12,7 @@ use psx_gpu::{self as gpu};
 use psx_vram::{upload_16bpp, TexDepth, Tpage, VramRect};
 
 pub use crate::icons_data::Cell;
-pub use crate::icons_data::{CIRCLE, SELECT, START, TRIANGLE};
+pub use crate::icons_data::{CIRCLE, CROSS, SELECT, START, TRIANGLE};
 use crate::icons_data::{ATLAS, ATLAS_H, ATLAS_W};
 
 const ICON_TPAGE: Tpage = Tpage::new(576, 0, TexDepth::Bit15);
