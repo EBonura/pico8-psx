@@ -1,0 +1,11 @@
+[package]
+name = "rsx-audio-capture"
+version = "0.1.0"
+edition = "2021"
+
+# Headless SPU WAV capture for rsx-redux (a FIFO-accurate PS1 emulator), the
+# faithful reference we diff PSoXide against. rsx-redux lives as a sibling clone:
+#   git clone https://github.com/annethereshewent/rsx-redux ~/Desktop/repos/rsx-redux
+[dependencies]
+rsx-redux = { path = "../../../rsx-redux", default-features = false, features = ["software_gpu"] }
+hound = "3"
