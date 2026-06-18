@@ -478,12 +478,16 @@ pub fn quad(p: [(i16, i16); 4], c: i32) {
 
 // ---- Side-margin gradient (the 32px bars beside the 256-wide field) ----
 // (top RGB, bottom RGB) per preset. Preset 0 = solid black (the classic look).
+// (top RGB, bottom RGB) per preset, in 8-bit channels. The originals were
+// ~15-20% brightness, which a PC monitor shows but a real CRT/TV crushes to
+// black (the gradient was invisible on console). Brightened ~3x so the top
+// reads clearly on a TV while the bottom still fades toward the dark playfield.
 const SIDE_PRESETS: [((u8, u8, u8), (u8, u8, u8)); 5] = [
     ((0, 0, 0), (0, 0, 0)),                          // Off (black)
-    ((0x22, 0x14, 0x32), (0x06, 0x04, 0x10)),        // Dusk (purple)
-    ((0x10, 0x24, 0x32), (0x04, 0x08, 0x12)),        // Ocean (teal)
-    ((0x2c, 0x12, 0x12), (0x0c, 0x04, 0x04)),        // Ember (red)
-    ((0x14, 0x22, 0x16), (0x04, 0x08, 0x06)),        // Forest (green)
+    ((0x66, 0x3c, 0x96), (0x12, 0x0c, 0x30)),        // Dusk (purple)
+    ((0x30, 0x6c, 0x96), (0x0c, 0x18, 0x36)),        // Ocean (teal)
+    ((0x84, 0x36, 0x36), (0x24, 0x0c, 0x0c)),        // Ember (red)
+    ((0x3c, 0x66, 0x42), (0x0c, 0x18, 0x12)),        // Forest (green)
 ];
 static mut SIDE_PRESET: u8 = 1; // default: the Dusk gradient
 
