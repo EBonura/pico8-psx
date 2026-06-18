@@ -41,7 +41,13 @@ const EMPTY_CART: Cart = Cart { gfx: &[], tilemap: &[], tile_flags: &[], map_w: 
 // ---- VRAM layout (off-screen, right of the framebuffers) ----
 const GFX_TPAGE: Tpage = Tpage::new(640, 0, TexDepth::Bit4); // 256x256 4bpp -> 64 halfwords wide
 const FONT_TPAGE: Tpage = Tpage::new(704, 0, TexDepth::Bit4); // 256x170 4bpp
-const SPRITE_CLUT: Clut = Clut::new(0, 480); // 16 entries, below the framebuffers
+// Two ping-pong slots for the sprite palette. The PS1 GPU caches the CLUT and
+// reloads it only when the clut *word* changes -- NOT when its VRAM is
+// overwritten -- so a pal() recolour must land in the OTHER slot to force a
+// reload, else the sprite keeps the stale palette on hardware (Madeline's hair
+// stuck red). Both 16 entries, side by side on the free row below the framebuffers.
+const SPRITE_CLUT_A: Clut = Clut::new(0, 480);
+const SPRITE_CLUT_B: Clut = Clut::new(16, 480);
 const TEXT_CLUT: Clut = Clut::new(0, 481); // one row, re-uploaded per print colour
 const FILLP_TPAGE: Tpage = Tpage::new(768, 0, TexDepth::Bit4); // 8x8 dither patterns side-by-side
 const FILL_CLUT: Clut = Clut::new(0, 482); // 2 entries (0 = transparent, 1 = fill colour)
@@ -88,7 +94,7 @@ pub fn upload_assets(cart: Cart) {
     set_cart(cart);
     upload_16bpp(VramRect::new(GFX_TPAGE.x(), GFX_TPAGE.y(), 64, 256), cart.gfx);
     upload_16bpp(VramRect::new(FONT_TPAGE.x(), FONT_TPAGE.y(), 64, 170), &FONT_DATA);
-    upload_16bpp(VramRect::new(SPRITE_CLUT.x(), SPRITE_CLUT.y(), 16, 1), &PICO8_CLUT);
+    upload_16bpp(VramRect::new(sprite_clut().x(), sprite_clut().y(), 16, 1), &PICO8_CLUT);
     upload_fillp();
 }
 
@@ -238,7 +244,7 @@ pub fn spr(n: i32, x: i16, y: i16, flip_x: bool, flip_y: bool) {
     let u0 = ((n % 16) * 16) as u8;
     let v0 = ((n / 16) * 16) as u8;
     begin_sprite_pass();
-    draw_cell(sx(x), sy(y), u0, v0, SPRITE_CLUT.uv_clut_word(), GFX_TPAGE, flip_x, flip_y);
+    draw_cell(sx(x), sy(y), u0, v0, sprite_clut().uv_clut_word(), GFX_TPAGE, flip_x, flip_y);
 }
 
 /// `mget(x,y)` -- raw map fetch (NOT camera/room relative).
@@ -270,7 +276,7 @@ pub fn fget(t: i32, f: i32) -> bool {
 /// `mask-1`. PICO-8 `map()` never draws sprite 0 (treated as empty).
 pub fn map(mx: i32, my: i32, tx: i16, ty: i16, mw: i32, mh: i32, mask: i32) {
     begin_sprite_pass();
-    let clut_word = SPRITE_CLUT.uv_clut_word();
+    let clut_word = sprite_clut().uv_clut_word();
     let cart = unsafe { CART };
     for j in 0..mh {
         for i in 0..mw {
@@ -646,10 +652,28 @@ pub fn camera(x: i16, y: i16) {
     }
 }
 
+/// Which ping-pong slot the sprite CLUT currently lives in.
+static mut SPRITE_CLUT_SLOT: bool = false;
+
+/// The sprite CLUT's active slot. spr()/map() build their clut word from this,
+/// and it flips on every `pal()` change so the GPU reloads its CLUT cache.
+fn sprite_clut() -> Clut {
+    if unsafe { SPRITE_CLUT_SLOT } {
+        SPRITE_CLUT_B
+    } else {
+        SPRITE_CLUT_A
+    }
+}
+
 /// Re-upload the sprite CLUT so textured draws (spr/map) honour the current
 /// `pal()` remap -- entry i = the palette colour PAL[i] points at. circfill/
-/// rectfill already remap via PAL directly; sprites read this CLUT, so e.g.
-/// Madeline's hair (colour 8) only turns blue on dash once this is in sync.
+/// rectfill already remap via PAL directly; sprites read this CLUT.
+///
+/// Crucially this ping-pongs to the OTHER slot first: the PS1 GPU caches the
+/// CLUT keyed on the clut word and does NOT reload it when the same slot's VRAM
+/// is overwritten, so re-uploading in place leaves the sprite on the stale
+/// palette on real hardware (Madeline's hair stuck red). Moving slots changes
+/// the clut word, forcing the GPU to reload.
 fn sync_sprite_clut() {
     let mut c = [0u16; 16];
     let mut i = 0usize;
@@ -657,7 +681,11 @@ fn sync_sprite_clut() {
         c[i] = PICO8_CLUT[(unsafe { PAL[i] } as usize) & 15];
         i += 1;
     }
-    upload_16bpp(VramRect::new(SPRITE_CLUT.x(), SPRITE_CLUT.y(), 16, 1), &c);
+    let clut = unsafe {
+        SPRITE_CLUT_SLOT = !SPRITE_CLUT_SLOT;
+        sprite_clut()
+    };
+    upload_16bpp(VramRect::new(clut.x(), clut.y(), 16, 1), &c);
 }
 
 /// Wait for the GPU to finish the queued draws. Call before a palette change
