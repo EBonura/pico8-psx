@@ -1,15 +1,15 @@
 [package]
-name    = "demo"
+name    = "celeste-collection"
 version = "0.1.0"
 edition = "2021"
 
-# Stand-alone workspace root, like the individual game crates. The demo
-# is the headline artifact: one boot EXE that shows a cover menu and
-# launches either game (both linked in as libraries).
+# Stand-alone workspace root, like the individual game crates. The
+# collection is the headline artifact: one boot EXE that shows a cover
+# menu and launches either game (both linked in as libraries).
 [workspace]
 
 [[bin]]
-name = "demo"
+name = "celeste-collection"
 path = "src/main.rs"
 
 [profile.release]

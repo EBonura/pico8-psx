@@ -13,62 +13,63 @@ TARGET   := mipsel-sony-psx
 DIST     := $(ROOT)/dist
 
 # Where PSoXide's frontend scans for games (the `game_library` setting). The
-# `collection` target installs the demo disc here under COLLECTION_NAME so it
-# shows up in PSoXide's list automatically. Override with `make collection
-# PSOXIDE_LIB=/path`. The name has spaces/parens; mkisopsx quotes the CUE FILE line.
+# `collection-install` target installs the collection disc here under
+# COLLECTION_NAME so it shows up in PSoXide's list automatically. Override with
+# `make collection-install PSOXIDE_LIB=/path`. The name has spaces; mkisopsx
+# quotes the CUE FILE line.
 PSOXIDE_LIB     ?= $(HOME)/Downloads/ps1 games
-COLLECTION_NAME := Celeste Classic Collection PSX (Homebrew)
+COLLECTION_NAME := Celeste Classic Collection
 
-.PHONY: help submodule clean demo demo-disc collection celeste celeste-disc celeste2 celeste2-disc
+.PHONY: help submodule clean collection collection-disc collection-install celeste celeste-disc celeste2 celeste2-disc
 
 help:
 	@echo "pico8-psx targets:"
-	@echo "  make demo          - build the demo-disc launcher PSX-EXE (both games + menu)"
-	@echo "  make demo-disc     - build the demo + pack dist/demo.{bin,cue}  [headline artifact]"
-	@echo "  make collection    - build the demo + install into PSoXide's library as 'Celeste Classic Collection PSX (Homebrew)'"
-	@echo "  make celeste       - build the standalone Celeste PSX-EXE"
-	@echo "  make celeste-disc  - build celeste + pack a burnable .bin/.cue into dist/"
-	@echo "  make celeste2      - build the standalone Celeste 2 PSX-EXE"
-	@echo "  make celeste2-disc - build celeste2 + pack a burnable .bin/.cue into dist/"
-	@echo "  make submodule     - init/update the pinned PSoXide submodule"
-	@echo "  make clean         - remove build output"
+	@echo "  make collection         - build the Celeste Classic Collection launcher PSX-EXE (both games + menu)"
+	@echo "  make collection-disc    - build the collection + pack dist/celeste-collection.{bin,cue}  [headline artifact]"
+	@echo "  make collection-install - build the collection + install into PSoXide's library as 'Celeste Classic Collection'"
+	@echo "  make celeste            - build the standalone Celeste PSX-EXE"
+	@echo "  make celeste-disc       - build celeste + pack a burnable .bin/.cue into dist/"
+	@echo "  make celeste2           - build the standalone Celeste 2 PSX-EXE"
+	@echo "  make celeste2-disc      - build celeste2 + pack a burnable .bin/.cue into dist/"
+	@echo "  make submodule          - init/update the pinned PSoXide submodule"
+	@echo "  make clean              - remove build output"
 
 submodule:
 	git submodule update --init --recursive
 
 clean:
 	rm -rf $(DIST)
-	cd games/demo && cargo clean
+	cd games/celeste-collection && cargo clean
 	cd games/celeste && cargo clean
 	cd games/celeste2 && cargo clean
 
-# ---- Demo disc (headline artifact) -----------------------------------
+# ---- Celeste Classic Collection (headline artifact) ------------------
 # One bootable image: a cover menu that launches either game. Both games
 # are linked into the launcher as libraries, so this is a single boot EXE
 # (mkisopsx packs exactly one).
-DEMO_DIR := $(ROOT)/games/demo
-DEMO_EXE := $(DEMO_DIR)/target/$(TARGET)/release/demo.exe
+COLLECTION_DIR := $(ROOT)/games/celeste-collection
+COLLECTION_EXE := $(COLLECTION_DIR)/target/$(TARGET)/release/celeste-collection.exe
 
-demo:
-	cd $(DEMO_DIR) && cargo build --release
-	@echo "EXE  -> $(DEMO_EXE)"
+collection:
+	cd $(COLLECTION_DIR) && cargo build --release
+	@echo "EXE  -> $(COLLECTION_EXE)"
 
-demo-disc: demo
+collection-disc: collection
 	@mkdir -p $(DIST)
 	cd $(MKISOPSX) && cargo run --release -- \
-		--exe $(DEMO_EXE) \
-		--out $(DIST)/demo.bin \
-		--volume PICO8PSX
-	@echo "DISC -> $(DIST)/demo.cue"
+		--exe $(COLLECTION_EXE) \
+		--out $(DIST)/celeste-collection.bin \
+		--volume CELESTECOLL
+	@echo "DISC -> $(DIST)/celeste-collection.cue"
 
-# Install the demo disc into PSoXide's game library under COLLECTION_NAME,
+# Install the collection disc into PSoXide's game library under COLLECTION_NAME,
 # so it appears in the frontend's list. mkisopsx writes the .cue alongside the
 # .bin with a relative FILE reference, matching the library's per-game folder
 # layout. The library path may contain a space, so quote it in the recipe.
-collection: demo
+collection-install: collection
 	@mkdir -p "$(PSOXIDE_LIB)/$(COLLECTION_NAME)"
 	cd $(MKISOPSX) && cargo run --release -- \
-		--exe $(DEMO_EXE) \
+		--exe $(COLLECTION_EXE) \
 		--out "$(PSOXIDE_LIB)/$(COLLECTION_NAME)/$(COLLECTION_NAME).bin" \
 		--volume CELESTECOLL
 	@echo "INSTALLED -> $(PSOXIDE_LIB)/$(COLLECTION_NAME)/$(COLLECTION_NAME).cue"

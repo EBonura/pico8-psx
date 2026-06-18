@@ -1,4 +1,4 @@
-//! Static assets for the demo-disc launcher menu.
+//! Static assets for the collection launcher menu.
 //!
 //! `palette` is the universal PICO-8 16-colour CLUT (shared verbatim with
 //! the games). `cover_celeste*` are the real PICO-8 cart labels (128x128

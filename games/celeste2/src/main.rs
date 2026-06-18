@@ -1,5 +1,5 @@
 //! Standalone Celeste 2 disc entry point. The game itself lives in the
-//! `celeste2` library (`lib.rs`) so the demo-disc launcher can link it in;
+//! `celeste2` library (`lib.rs`) so the collection launcher can link it in;
 //! this thin binary just hands control to it. Quitting (Select+Start)
 //! returns from `run`, so here it simply boots again.
 

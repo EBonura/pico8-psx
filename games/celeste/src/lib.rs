@@ -6,7 +6,7 @@
 //! crate; this crate supplies Celeste's own assets and wires them in as the
 //! active [`Cart`] / [`AudioData`].
 //!
-//! Exposed as a library so the demo-disc launcher can link it in and call
+//! Exposed as a library so the collection launcher can link it in and call
 //! [`run`]; the standalone `main` just calls it. Holding Select+Start returns
 //! from [`run`] (quit to the launcher).
 
@@ -36,7 +36,7 @@ const CART: Cart = Cart {
     map_w: MAP_W,
 };
 
-/// Celeste's PICO-8 sound data (42 music patterns). Public so the demo launcher
+/// Celeste's PICO-8 sound data (42 music patterns). Public so the collection launcher
 /// can reuse it as the menu's sound bank (cursor-move / select blips).
 pub const AUDIO: AudioData = AudioData {
     waveform_adpcm: &WAVEFORM_ADPCM,

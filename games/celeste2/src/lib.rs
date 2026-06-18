@@ -9,7 +9,7 @@
 //! PHASE A: object engine + player normal-state physics on level 1. Grapple,
 //! the other objects, level streaming and audio come next.
 //!
-//! Exposed as a library so the demo-disc launcher can link it in and call
+//! Exposed as a library so the collection launcher can link it in and call
 //! [`run`]; holding Select+Start returns from [`run`] (quit to the launcher).
 
 #![no_std]
@@ -30,7 +30,7 @@ use psx_gpu::{self as gpu, Resolution, VideoMode, framebuf::FrameBuffer};
 use psx_pad::{button, poll_port1};
 
 /// Celeste 2's spritesheet + tilemap as the active PICO-8 cart.
-const CART: Cart = Cart {
+pub const CART: Cart = Cart {
     gfx: &GFX_DATA,
     tilemap: &TILEMAP_DATA,
     tile_flags: &TILE_FLAGS,
@@ -38,7 +38,7 @@ const CART: Cart = Cart {
 };
 
 /// Celeste 2's PICO-8 sound data (42 music patterns).
-const AUDIO: AudioData = AudioData {
+pub const AUDIO: AudioData = AudioData {
     waveform_adpcm: &WAVEFORM_ADPCM,
     waveform_offset: &WAVEFORM_OFFSET,
     waveform_adpcm_long: &WAVEFORM_ADPCM_LONG,

@@ -1,4 +1,4 @@
-//! pico8-psx demo disc -- the headline artifact.
+//! Celeste Classic Collection -- the headline artifact.
 //!
 //! Boot flow: a fading Bonnie Studios intro (logo + "Built with PSoXIDE") ->
 //! a cover menu showing the real PICO-8 cart labels for each demade game. Pick

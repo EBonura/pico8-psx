@@ -12,8 +12,8 @@ a follow camera, and an in-game pause menu (volume, screen mode, borders).
 ```sh
 git clone --recursive https://github.com/EBonura/pico8-psx
 
-make demo-disc        # the collection      -> dist/demo.{bin,cue}
-make celeste-disc     # standalone Celeste  -> dist/celeste.{bin,cue}
+make collection-disc  # the collection       -> dist/celeste-collection.{bin,cue}
+make celeste-disc     # standalone Celeste   -> dist/celeste.{bin,cue}
 make celeste2-disc    # standalone Celeste 2 -> dist/celeste2.{bin,cue}
 ```
 
@@ -24,8 +24,8 @@ to choose, X to play; hold Select+Start in-game to return.
 ## Layout
 
 Each game is a standalone Cargo workspace exposing `run()`, shipped on its own or linked into
-the `demo` launcher, both games in one combined EXE, packed into a single `.bin`/`.cue` disc
-image. Shared runtime, rendering, SPU audio, fonts, pause menu, lives in `shared/`. The PSoXide SDK is pinned as a git submodule under `third_party/`;
+the `celeste-collection` launcher, both games in one combined EXE, packed into a single
+`.bin`/`.cue` disc image. Shared runtime, rendering, SPU audio, fonts, pause menu, lives in `shared/`. The PSoXide SDK is pinned as a git submodule under `third_party/`;
 `tools/` holds the PICO-8 -> Rust asset/audio converters.
 
 ## Credits

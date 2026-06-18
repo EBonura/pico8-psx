@@ -19,17 +19,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "celeste2"
-version = "0.1.0"
-dependencies = [
- "pico8",
- "psx-gpu",
- "psx-pad",
- "psx-rt",
-]
-
-[[package]]
-name = "demo"
+name = "celeste-collection"
 version = "0.1.0"
 dependencies = [
  "celeste",
@@ -40,6 +30,16 @@ dependencies = [
  "psx-pad",
  "psx-rt",
  "psx-vram",
+]
+
+[[package]]
+name = "celeste2"
+version = "0.1.0"
+dependencies = [
+ "pico8",
+ "psx-gpu",
+ "psx-pad",
+ "psx-rt",
 ]
 
 [[package]]
