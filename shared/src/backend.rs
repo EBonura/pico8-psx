@@ -510,37 +510,42 @@ pub fn side_preset_name(p: u8) -> &'static str {
     }
 }
 
-/// Fill the two side margins (screen x 0..32 and 288..320, full 240 height) with
-/// the selected vertical gradient. Screen-space (raw GP0), independent of the
-/// camera/vertical-pan; call last in the game's draw to cover the field overdraw.
+/// Fill the screen margins with the selected gradient. The left/right side bars
+/// run HORIZONTALLY -- the preset's bright colour at the screen edge fading in to
+/// the dark colour toward the playfield (mirrored left vs right, so both glow
+/// from the outside in). The 1x top/bottom bars run vertically, same edge->in
+/// fade. Screen-space (raw GP0), independent of the camera/vertical-pan; call
+/// last in the game's draw to cover the field overdraw.
 pub fn side_bars() {
-    let (t, b) = SIDE_PRESETS[unsafe { SIDE_PRESET } as usize];
+    let (edge, inner) = SIDE_PRESETS[unsafe { SIDE_PRESET } as usize];
     // Playfield rect on screen. At 2x it spans the full height (top/bottom clipped,
     // no margin there); at 1x it's centred 128x128, so all four sides have margin.
     let px0 = ofs_x();
     let px1 = px0 + play_w();
     let py0 = ofs_y_center().max(0);
     let py1 = (ofs_y_center() + 128 * unsafe { SCALE }).min(240);
-    side_strip(0, px0, 0, 240, t, b); // left (full height)
-    side_strip(px1, 320, 0, 240, t, b); // right
+    side_strip_h(0, px0, 0, 240, edge, inner); // left: bright at x=0 -> dark inward
+    side_strip_h(px1, 320, 0, 240, inner, edge); // right: dark inward -> bright at x=320
     if py0 > 0 {
-        side_strip(px0, px1, 0, py0, t, b); // top (1x only)
+        side_strip_v(px0, px1, 0, py0, edge, inner); // top (1x): bright at y=0
     }
     if py1 < 240 {
-        side_strip(px0, px1, py1, 240, t, b); // bottom (1x only)
+        side_strip_v(px0, px1, py1, 240, inner, edge); // bottom (1x): bright at y=240
     }
 }
-/// One screen-space strip filled with the preset's vertical gradient, sampled at
-/// the strip's own y range so the whole border reads as one continuous gradient.
-fn side_strip(x0: i16, x1: i16, y0: i16, y1: i16, top: (u8, u8, u8), bot: (u8, u8, u8)) {
+/// Strip with a HORIZONTAL gradient: `c0` at the left edge `x0`, `c1` at `x1`.
+fn side_strip_h(x0: i16, x1: i16, y0: i16, y1: i16, c0: (u8, u8, u8), c1: (u8, u8, u8)) {
     if x1 <= x0 || y1 <= y0 {
         return;
     }
-    let at = |y: i16| -> (u8, u8, u8) {
-        let mix = |a: u8, c: u8| (a as i32 + (c as i32 - a as i32) * y as i32 / 240) as u8;
-        (mix(top.0, bot.0), mix(top.1, bot.1), mix(top.2, bot.2))
-    };
-    let (c0, c1) = (at(y0), at(y1));
+    gpu::draw_tri_gouraud([(x0, y0), (x1, y0), (x0, y1)], [c0, c1, c0]);
+    gpu::draw_tri_gouraud([(x1, y0), (x0, y1), (x1, y1)], [c1, c0, c1]);
+}
+/// Strip with a VERTICAL gradient: `c0` at the top edge `y0`, `c1` at `y1`.
+fn side_strip_v(x0: i16, x1: i16, y0: i16, y1: i16, c0: (u8, u8, u8), c1: (u8, u8, u8)) {
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
     gpu::draw_tri_gouraud([(x0, y0), (x1, y0), (x0, y1)], [c0, c0, c1]);
     gpu::draw_tri_gouraud([(x1, y0), (x0, y1), (x1, y1)], [c0, c1, c1]);
 }
