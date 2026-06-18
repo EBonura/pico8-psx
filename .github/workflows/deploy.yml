@@ -1,0 +1,37 @@
+name: Deploy to itch.io
+
+# Pushes the prebuilt PS1 disc image (release/) to itch.io via butler. The disc
+# is built locally with `make collection-release`, so no PS1 toolchain runs on
+# CI. Triggers when release/ changes, or run manually.
+#
+# One-time setup in the GitHub repo (Settings -> Secrets and variables -> Actions):
+#   - BUTLER_API_KEY = your itch.io API key (https://itch.io/user/settings/api-keys)
+#
+# Set ITCH_TARGET below to "<your-itch-user>/<your-game-page>". The ":psx" suffix
+# is the butler channel (an arbitrary label for this download).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'release/**'
+  workflow_dispatch:
+
+env:
+  ITCH_TARGET: bonnie-studios/celeste-classic-collection
+  ITCH_CHANNEL: psx
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push to itch.io via butler
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          curl -L -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
+          unzip butler.zip
+          chmod +x butler
+          ./butler push ./release "${ITCH_TARGET}:${ITCH_CHANNEL}"

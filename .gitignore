@@ -9,6 +9,12 @@ target/
 *.cue
 *.toc
 
+# itch.io release artifacts -- pushed to itch via butler, so the disc image in
+# release/ must be tracked despite the *.bin / *.cue ignores above.
+!/release/*.bin
+!/release/*.cue
+!/release/*.txt
+
 # Reference audio captures (regenerable from the carts via tools/record_pico8_sfx.py)
 audio-ref/
 *.wav

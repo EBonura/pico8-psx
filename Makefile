@@ -20,7 +20,7 @@ DIST     := $(ROOT)/dist
 PSOXIDE_LIB     ?= $(HOME)/Downloads/ps1 games
 COLLECTION_NAME := Celeste Classic Collection
 
-.PHONY: help submodule clean collection collection-disc collection-install celeste celeste-disc celeste2 celeste2-disc
+.PHONY: help submodule clean collection collection-disc collection-install collection-release celeste celeste-disc celeste2 celeste2-disc
 
 help:
 	@echo "pico8-psx targets:"
@@ -73,6 +73,14 @@ collection-install: collection
 		--out "$(PSOXIDE_LIB)/$(COLLECTION_NAME)/$(COLLECTION_NAME).bin" \
 		--volume CELESTECOLL
 	@echo "INSTALLED -> $(PSOXIDE_LIB)/$(COLLECTION_NAME)/$(COLLECTION_NAME).cue"
+
+# Stage the collection disc into release/ (a tracked dir) so committing + pushing
+# triggers the itch.io upload via butler -- see .github/workflows/deploy.yml.
+RELEASE := $(ROOT)/release
+collection-release: collection-disc
+	@mkdir -p $(RELEASE)
+	cp $(DIST)/celeste-collection.bin $(DIST)/celeste-collection.cue $(RELEASE)/
+	@echo "RELEASE -> $(RELEASE)/  (now: git add release && git commit && git push)"
 
 # ---- Celeste ---------------------------------------------------------
 CELESTE_DIR := $(ROOT)/games/celeste
