@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 env:
-  ITCH_TARGET: bonnie-studios/celeste-classic-collection
+  ITCH_TARGET: bonnie-studios/celeste-classic-collection-psx
   ITCH_CHANNEL: psx
 
 jobs:
