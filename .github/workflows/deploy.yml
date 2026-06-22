@@ -34,4 +34,4 @@ jobs:
           curl -L -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
           unzip butler.zip
           chmod +x butler
-          ./butler push ./release "${ITCH_TARGET}:${ITCH_CHANNEL}"
+          ./butler push --userversion "$(cat VERSION)" ./release "${ITCH_TARGET}:${ITCH_CHANNEL}"
