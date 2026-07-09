@@ -6,8 +6,9 @@
 //! 60fps with PICO-8 velocities kept at face value, accelerations + per-frame
 //! moves halved, and frame timers doubled (matching the Celeste 1 port).
 //!
-//! PHASE A: object engine + player normal-state physics on level 1. Grapple,
-//! the other objects, level streaming and audio come next.
+//! Ported in full: the object engine, the player (including the grapple
+//! state machine), the object set, the complete PX9-decoded level set, and
+//! the PICO-8 audio engine (see game.rs for the inventory).
 //!
 //! Exposed as a library so the collection launcher can link it in and call
 //! [`run`]; holding Select+Start returns from [`run`] (quit to the launcher).

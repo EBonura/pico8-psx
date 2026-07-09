@@ -12,10 +12,22 @@ edition = "2021"
 name = "celeste2"
 path = "src/main.rs"
 
-# Offline audio test disc (fidelity work; not the game).
+# Offline audio/video test discs (fidelity + hardware checks; not the game).
 [[bin]]
 name = "musictest"
 path = "src/bin/musictest.rs"
+
+[[bin]]
+name = "soundtest"
+path = "src/bin/soundtest.rs"
+
+[[bin]]
+name = "musiso"
+path = "src/bin/musiso.rs"
+
+[[bin]]
+name = "gputest"
+path = "src/bin/gputest.rs"
 
 [profile.release]
 # no_std has no unwinder; abort keeps the binary small.

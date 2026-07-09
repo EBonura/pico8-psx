@@ -1,7 +1,7 @@
 # Build this crate for the PlayStation 1 by default, so a plain
-# `cargo build --release` inside this directory produces a PSX-EXE.
+# `cargo build --release` inside this directory produces the PSX rlib.
 #
-# This config lives under the game crate (not the repo root) on
+# This config lives under the shared crate (not the repo root) on
 # purpose: it must NOT leak onto the host tools (mkisopsx) that the
 # Makefile builds from inside the PSoXide submodule.
 [build]

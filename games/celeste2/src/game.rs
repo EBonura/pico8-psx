@@ -10,8 +10,9 @@
 //! Ported: object engine, the player (run/jump/wall-jump + the full grapple
 //! state machine), the object types (spikes, grapple pickup, grappler, berry,
 //! crumble, bridge, snowball, springboard, checkpoint, spawners), hazards +
-//! death + level restart, and a follow camera. Level data is the cart's
-//! level-1 tilemap for now; PX9 multi-level streaming layers on top.
+//! death + level restart, and a follow camera. Level data is the full
+//! PX9-decompressed level set (assets/levels.rs); goto_level points the
+//! active cart at the selected level's tilemap.
 
 #![allow(static_mut_refs)]
 
