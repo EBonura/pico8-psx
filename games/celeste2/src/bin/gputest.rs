@@ -12,12 +12,7 @@ extern crate psx_rt;
 
 use pico8::{backend, sfx};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
-
-#[inline]
-fn wait_vblank() {
-    let v = psx_rt::interrupts::vblank_count();
-    while psx_rt::interrupts::vblank_count() == v {}
-}
+use psx_rt::interrupts::wait_vblank;
 
 #[no_mangle]
 fn main() {

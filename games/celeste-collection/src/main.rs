@@ -33,6 +33,9 @@ use pico8::{backend, debug, icons, menusfx, sfx};
 use psx_font::{fonts::BASIC, FontAtlas};
 use psx_gpu::{self as gpu, framebuf::FrameBuffer, Resolution, VideoMode};
 use psx_pad::{button, poll_port1, ButtonState};
+// The SDK's `gpu::vsync()` busy-waits a fixed 242 hblanks (~15.4ms) instead of
+// syncing to the display; the VBlank IRQ counter waits for the real blank.
+use psx_rt::interrupts::wait_vblank;
 use psx_vram::{upload_16bpp, Clut, TexDepth, Tpage, VramRect};
 
 // Menu SFX are dedicated CC0 one-shot samples (see pico8::menusfx), NOT in-game
@@ -69,14 +72,6 @@ const COVER2_X: i16 = 180; // centre 228
 const CENTER1: i16 = COVER1_X + COVER_W / 2;
 const CENTER2: i16 = COVER2_X + COVER_W / 2;
 const SCREEN_CX: i16 = 160;
-
-/// Wait for the next real VBlank IRQ (the SDK's `gpu::vsync()` busy-waits a fixed
-/// 242 hblanks ~= 15.4ms instead of syncing to the display).
-#[inline]
-fn wait_vblank() {
-    let v = psx_rt::interrupts::vblank_count();
-    while psx_rt::interrupts::vblank_count() == v {}
-}
 
 #[no_mangle]
 fn main() {

@@ -27,6 +27,11 @@ use pico8::pause::{self, Exit, Pause};
 use pico8::sfx::{self, AudioData};
 use psx_gpu::{self as gpu, Resolution, VideoMode, framebuf::FrameBuffer};
 use psx_pad::{button, poll_port1};
+// The SDK's `gpu::vsync()` busy-waits a fixed 242 hblanks (~15.4ms) from when
+// it's called instead of syncing to the display, which left only ~1.3ms of
+// per-frame compute before dropping below 60fps. The VBlank IRQ counter
+// (already installed for audio) gives the full ~16.6ms frame.
+use psx_rt::interrupts::wait_vblank;
 
 /// Celeste's spritesheet + tilemap as the active PICO-8 cart.
 const CART: Cart = Cart {
@@ -77,16 +82,6 @@ fn pad_mask() -> u8 {
         mask |= 1 << 6; // debug fly (only acts when fly mode is on)
     }
     mask
-}
-
-/// Wait for the next real VBlank IRQ. The SDK's `gpu::vsync()` busy-waits a fixed
-/// 242 hblanks (~15.4ms) from when it's called instead of syncing to the display,
-/// which left only ~1.3ms of per-frame compute before dropping below 60fps. The
-/// VBlank IRQ counter (already installed for audio) gives the full ~16.6ms frame.
-#[inline]
-fn wait_vblank() {
-    let v = psx_rt::interrupts::vblank_count();
-    while psx_rt::interrupts::vblank_count() == v {}
 }
 
 /// Boot Celeste and run its 60fps frame loop until Select+Start is held.
