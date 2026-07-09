@@ -17,3 +17,4 @@ psx-io   = { path = "../third_party/PSoXide/sdk/crates/psx-io" }
 psx-hw   = { path = "../third_party/PSoXide/crates/psx-hw" }
 psx-spu  = { path = "../third_party/PSoXide/sdk/crates/psx-spu" }
 psx-font = { path = "../third_party/PSoXide/sdk/crates/psx-font" }
+psx-pad  = { path = "../third_party/PSoXide/sdk/crates/psx-pad" }

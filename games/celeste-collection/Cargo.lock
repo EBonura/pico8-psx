@@ -50,6 +50,7 @@ dependencies = [
  "psx-gpu",
  "psx-hw",
  "psx-io",
+ "psx-pad",
  "psx-spu",
  "psx-vram",
 ]
