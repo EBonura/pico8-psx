@@ -3,7 +3,8 @@
 #   - the built-in `mipsel-sony-psx` target
 #   - `-Zbuild-std` (no prebuilt std for the PSX target)
 #   - the inline-asm BIOS trampolines inside PSoXide's psx-rt
-# Keep this in sync with the pinned PSoXide submodule's own
-# rust-toolchain.toml so host tools (mkisopsx) and device code agree.
-channel    = "nightly"
+# Date-pinned to the SAME nightly as the pinned PSoXide submodule's
+# rust-toolchain.toml, so host tools (mkisopsx) and device code agree
+# and the released collection rebuilds reproducibly. Bump both together.
+channel    = "nightly-2026-03-25"
 components = ["rust-src", "llvm-tools", "rustfmt", "clippy"]

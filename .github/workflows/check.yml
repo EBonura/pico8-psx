@@ -1,0 +1,18 @@
+name: host check
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned nightly
+        run: |
+          rustup toolchain install nightly-2026-03-25 --component rust-src
+          rustup default nightly-2026-03-25
+      - name: Check shared/ for the host target
+        run: |
+          HOST=$(rustc -vV | sed -n 's/host: //p')
+          cargo check --manifest-path shared/Cargo.toml --target "$HOST"
