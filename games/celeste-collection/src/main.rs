@@ -76,6 +76,9 @@ const SCREEN_CX: i16 = 160;
 #[no_mangle]
 fn main() {
     psx_rt::interrupts::install_vblank_counter();
+    // Apply saved settings (volumes, pixel scale, borders) from the memory
+    // card, once, before anything renders. No card / no save = defaults.
+    pico8::save::load();
     atmos::init(); // seed the menu's cloud/particle backdrops
     show_intro(); // Bonnie Studios logo fade -> menu (once, on boot)
     let mut first = true; // play the intro->menu transition only on the first menu
@@ -410,6 +413,9 @@ fn show_settings() {
     let mut sel = 0usize;
     let mut prev = poll_port1().buttons;
     let mut frame = 0i32;
+    // A PERSISTED setting (volumes/pixel/borders; not Screen or Fly) was
+    // touched; written to the memory card once, when the screen closes.
+    let mut dirty = false;
 
     loop {
         let b = poll_port1().buttons;
@@ -447,6 +453,7 @@ fn show_settings() {
                 _ => changed = false,
             }
             if changed {
+                dirty |= matches!(sel, 0 | 1 | 2 | 4);
                 menusfx::play(menusfx::SFX_NAV);
             }
         }
@@ -463,11 +470,17 @@ fn show_settings() {
                 _ => changed = false,
             }
             if changed {
+                dirty |= matches!(sel, 2 | 4);
                 menusfx::play(menusfx::SFX_CONFIRM);
             }
         }
         if pressed(button::CIRCLE) || pressed(button::START) {
             menusfx::play(menusfx::SFX_CONFIRM);
+            // Closing the settings screen is the save point (mirrors the
+            // in-game pause menu). Skipped when nothing persisted changed.
+            if dirty {
+                pico8::save::save();
+            }
             return;
         }
         prev = b;

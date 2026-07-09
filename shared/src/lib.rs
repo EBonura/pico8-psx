@@ -30,6 +30,7 @@ pub mod menusfx;
 pub mod palette;
 pub mod pause;
 pub mod rng;
+pub mod save;
 pub mod sfx;
 pub mod util;
 mod sin_table;

@@ -61,6 +61,7 @@ pub struct Pause {
     prev: u8,
     blip: i32,        // SFX id played when nudging a volume slider, so it's audible
     fly: bool,        // show the debug "FLY" row (toggles pico8::debug fly mode)
+    changed: bool,    // a PERSISTED setting was touched; save to card on close
     font: FontAtlas,  // PSX (non-PICO-8) typeface for the menu text
 }
 
@@ -72,7 +73,7 @@ impl Pause {
     pub fn new(blip: i32, fly: bool) -> Self {
         let font = FontAtlas::upload(&BASIC, FONT_TPAGE, FONT_CLUT);
         crate::icons::upload();
-        Pause { sel: ROW_SFX, prev: 0xFF, blip, fly, font }
+        Pause { sel: ROW_SFX, prev: 0xFF, blip, fly, changed: false, font }
     }
 
     fn row_count(&self) -> u8 {
@@ -99,6 +100,11 @@ impl Pause {
 
         let count = self.row_count();
         if pressed & START != 0 {
+            // Closing after a settings change is the save point (never per
+            // slider tick; card writes are slow). No-op without a card.
+            if self.changed {
+                crate::save::save();
+            }
             return Some(Exit::Resume);
         }
         if pressed & (UP | DOWN) != 0 {
@@ -124,6 +130,7 @@ impl Pause {
                 crate::menusfx::play(crate::menusfx::SFX_NAV);
             } else if self.sel == self.pixel_row() {
                 backend::set_pixel_scale(if dir > 0 { 2 } else { 1 });
+                self.changed = true;
                 crate::menusfx::play(crate::menusfx::SFX_NAV);
             } else if self.sel == self.screen_row() && backend::pixel_scale() != 1 {
                 backend::set_screen_follow(dir > 0); // right = follow, left = centre
@@ -132,17 +139,20 @@ impl Pause {
                 let n = backend::side_preset_count() as i32;
                 let cur = backend::side_preset() as i32;
                 backend::set_side_preset((cur + dir).rem_euclid(n) as u8);
+                self.changed = true;
                 crate::menusfx::play(crate::menusfx::SFX_NAV);
             } else {
                 match self.sel {
                     ROW_SFX => {
                         let v = (sfx::sfx_volume() as i32 + dir).clamp(0, 8) as u16;
                         sfx::set_sfx_volume(v);
+                        self.changed = true;
                         sfx::play(self.blip);
                     }
                     ROW_MUSIC => {
                         let v = (sfx::music_volume() as i32 + dir).clamp(0, 8) as u16;
                         sfx::set_music_volume(v);
+                        self.changed = true;
                     }
                     _ => {}
                 }
@@ -155,6 +165,7 @@ impl Pause {
                 crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
             } else if self.sel == self.pixel_row() {
                 backend::set_pixel_scale(if backend::pixel_scale() == 2 { 1 } else { 2 });
+                self.changed = true;
                 crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
             } else if self.sel == self.screen_row() && backend::pixel_scale() != 1 {
                 backend::set_screen_follow(!backend::screen_follow());
@@ -162,9 +173,14 @@ impl Pause {
             } else if self.sel == self.borders_row() {
                 let n = backend::side_preset_count();
                 backend::set_side_preset((backend::side_preset() + 1) % n);
+                self.changed = true;
                 crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
             } else if self.sel == self.quit_row() {
                 crate::menusfx::play(crate::menusfx::SFX_CONFIRM);
+                // Quit-to-menu is also a save point for pending changes.
+                if self.changed {
+                    crate::save::save();
+                }
                 return Some(Exit::QuitToMenu);
             }
         }
