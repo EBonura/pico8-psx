@@ -76,25 +76,15 @@ const MUSIC_STOP: u8 = 0x04;
 // caps at 0x1000 (1/4 of the SPU's 0x4000 range).
 const VOL_TABLE: [u16; 8] = [0x0000, 0x0250, 0x0490, 0x06D0, 0x0920, 0x0B60, 0x0DB0, 0x1000];
 
-// --- direct SPU MMIO for hardware noise (instrument 6) ---------------------
+// --- hardware noise (instrument 6) ------------------------------------------
 // PICO-8's noise is continuous LFSR hiss; a looped sample wavetable just buzzes
 // at a pitch, so percussion is lost. The PS1 SPU has a hardware noise generator:
-// set a voice's bit in NON (Noise ON) and it outputs LFSR noise instead of its
-// sample, clocked by SPUCNT's 6-bit noise rate (bits 8..13). The SDK keeps these
-// registers private, so we drive them directly (all our voices are 0..7 < 16, so
-// only the low NON word matters).
-const NON_REG: u32 = 0x1F80_1D94; // Noise ON, voices 0..15
-const SPUCNT_REG: u32 = 0x1F80_1DAA;
+// route a voice's NON bit to it and it outputs LFSR noise instead of its sample,
+// clocked by SPUCNT's 6-bit noise rate. Driven through the SDK's
+// `Voice::set_noise_mask` / `spu::set_noise_clock`; the SDK setter writes the
+// whole mask, so a shadow tracks which voices are in noise mode (all our voices
+// are 0..7).
 static mut NOISE_MASK: u16 = 0;
-
-#[inline]
-fn reg_write16(addr: u32, v: u16) {
-    unsafe { core::ptr::write_volatile(addr as *mut u16, v) }
-}
-#[inline]
-fn reg_read16(addr: u32) -> u16 {
-    unsafe { core::ptr::read_volatile(addr as *const u16) }
-}
 
 /// Put voice `v` into (or out of) hardware-noise mode.
 unsafe fn set_voice_noise(v: usize, on: bool) {
@@ -106,29 +96,25 @@ unsafe fn set_voice_noise(v: usize, on: bool) {
         NOISE_MASK &= !bit;
     }
     if NOISE_MASK != was {
-        reg_write16(NON_REG, NOISE_MASK);
+        Voice::set_noise_mask(NOISE_MASK as u32);
     }
 }
 
-/// SPUCNT noise-rate field (bits 8..13) for a PICO-8 noise note `pitch` (0..63).
-/// On the SPU a higher NoiseShift = HIGHER (brighter) noise frequency, and PICO-8's
-/// noise gets brighter with pitch, so map pitch up to shift up. The SPU's LFSR
-/// noise is NARROWBAND (energy peaked near its centroid) while PICO-8's is
-/// BROADBAND, so we can't match both centroid AND the high-frequency hiss: matching
-/// the centroid (old shift = 1 + pitch/7) left the percussion ~5x short on
-/// 3-9kHz energy, reading as a dull thud with no snap. We bias brighter
-/// (shift = 1 + pitch/4, step 3) to restore the high-band hiss that makes a noise
-/// hit read as a drum, at the cost of a centroid ~1.5-2x high. step (bits 0..1) = 3.
-fn noise_clock(pitch: i32) -> u16 {
-    let shift = (1 + pitch / 4).clamp(1, 15) as u16;
-    (shift << 2) | 0x03
-}
-
-/// Set the global SPU noise frequency from a noise note's pitch (last writer
-/// wins; percussion is normally one voice).
+/// Set the global SPU noise frequency from a noise note's pitch (0..63; last
+/// writer wins, and percussion is normally one voice).
+///
+/// On the SPU a higher NoiseShift = HIGHER (brighter) noise frequency, and
+/// PICO-8's noise gets brighter with pitch, so map pitch up to shift up. The
+/// SPU's LFSR noise is NARROWBAND (energy peaked near its centroid) while
+/// PICO-8's is BROADBAND, so we can't match both centroid AND the
+/// high-frequency hiss: matching the centroid (old shift = 1 + pitch/7) left
+/// the percussion ~5x short on 3-9kHz energy, reading as a dull thud with no
+/// snap. We bias brighter (shift = 1 + pitch/4, step 3) to restore the
+/// high-band hiss that makes a noise hit read as a drum, at the cost of a
+/// centroid ~1.5-2x high.
 unsafe fn set_noise_freq(pitch: i32) {
-    let cnt = reg_read16(SPUCNT_REG) & !0x3F00;
-    reg_write16(SPUCNT_REG, cnt | (noise_clock(pitch) << 8));
+    let shift = (1 + pitch / 4).clamp(1, 15) as u8;
+    spu::set_noise_clock(shift, 3);
 }
 
 /// Phaser buddy pitch for an SPU pitch + PICO-8 key. zepto8: the two oscillators
